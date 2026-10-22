@@ -323,7 +323,7 @@ function ibw5BE2D(name, rows, cols) {
   const E = core.hermEig(Ar, Ai, k);
   let eres = 0;
   E.vals.forEach((lam, t) => { for (let a = 0; a < k; a++) { let sr = 0, si = 0; for (let b = 0; b < k; b++) { sr += Ar[a * k + b] * E.Ur[t][b] - Ai[a * k + b] * E.Ui[t][b]; si += Ar[a * k + b] * E.Ui[t][b] + Ai[a * k + b] * E.Ur[t][b]; } eres = Math.max(eres, Math.hypot(sr - lam * E.Ur[t][a], si - lam * E.Ui[t][a])); } });
-  check("12a Hermitian eigen-decomposition (Jacobi on the real embedding)", E.vals.length === k && eres < 1e-10 && E.vals.every((v, i) => !i || v <= E.vals[i - 1]), `max |Au − λu| ${eres.toExponential(1)}`);
+  check("12a Hermitian eigen-decomposition (Householder + QL on the real embedding)", E.vals.length === k && eres < 1e-10 && E.vals.every((v, i) => !i || v <= E.vals[i - 1]), `max |Au − λu| ${eres.toExponential(1)}`);
 
   // b–d. HSVD on its own
   const c20 = core.hsvdDenoise(clean, 20);
@@ -366,6 +366,17 @@ function ibw5BE2D(name, rows, cols) {
   check("12g excluded ranges are left out of the fit", Math.abs(P(inc, "scale") - 0.7) > 0.01 && close(P(exc, "scale"), 0.7, 1e-4), `a ${P(inc, "scale").toFixed(4)} with the band, ${P(exc, "scale").toFixed(6)} without`);
   const ux = Float64Array.from({ length: N }, (_, i) => 300 + i * (1 + 1e-4 * i) * 0.88), uR = ux.map(v => sum(CYC, v)), uS = ux.map(v => 0.6 * sum(CYC, v - 0.3));
   const ur = core.subtract({ x: ux, y: uS }, { x: ux, y: uR }, "t1", { regions: [], baseline: -1, hsvd: 20, iterate: true });
+  // i. the rank errs high by default, and that keeps weak bands of a Voigt-shaped reference that a low rank cuts
+  const vnodes = []; let vws = 0;
+  for (let j = -120; j <= 120; j++) { const s = 18 * j / 120, w = Math.exp(-s * s / 18); vnodes.push([s, w]); vws += w; }
+  const voigt = x.map(v => CYC.reduce((a, b) => { let t = 0, pk = 0; for (const [s, w] of vnodes) { t += w * lor(v - s, [b[0], 1, b[2]]); pk += w * lor(-s, [0, 1, b[2]]); } return a + b[1] * t / pk; }, 0));
+  const vy = noisy(voigt), dAuto = core.hsvdDenoise(vy, "auto"), d8 = core.hsvdDenoise(vy, 8), dLor = core.hsvdDenoise(noisy(clean), "auto");
+  const kept = (d, c) => { const i = c - 300; return (d.y[i - 1] + d.y[i] + d.y[i + 1]) / (voigt[i - 1] + voigt[i] + voigt[i + 1]); };
+  const t0 = performance.now(); core.hsvdDenoise(vy, 33); const tRebuild = performance.now() - t0;
+  check("12i cautious default rank keeps weak Voigt bands that rank 8 cuts; other ranks rebuild from the same decomposition",
+    dLor.rank === 40 && dAuto.rank >= 40 && [384, 1347].every(c => kept(dAuto, c) > 0.95) && Math.min(kept(d8, 384), kept(d8, 1347)) < 0.8 && tRebuild < 150,
+    `default rank ${dLor.rank} (Lorentzian), ${dAuto.rank} (Voigt); weak bands kept at the default ${[384, 1347].map(c => (100 * kept(dAuto, c)).toFixed(0) + "%").join(", ")}, ` +
+    `at rank 8 ${[384, 1347].map(c => (100 * kept(d8, c)).toFixed(0) + "%").join(", ")}; rank 33 rebuilt in ${tRebuild.toFixed(0)} ms`);
   check("12h HSVD on an uneven x axis (resampled evenly first)", close(P(ur, "shift"), 0.3, 2e-3) && close(P(ur, "a0"), 0.6, 2e-3) && ur.refDenoise.kind === "hsvd",
     `δ ${P(ur, "shift").toFixed(4)}, a₀ ${P(ur, "a0").toFixed(4)}`);
 }

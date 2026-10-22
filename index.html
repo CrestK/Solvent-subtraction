@@ -36,6 +36,9 @@
   input[aria-invalid=true] { outline: 2px solid #b00000; }
   .num { font-variant-numeric: tabular-nums; }
   .split { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 16px 24px; align-items: start; }
+  .denpair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.7fr); gap: 16px 24px; align-items: start; }
+  .denpair.single { grid-template-columns: minmax(0, 1fr); }
+  #svCanvas { cursor: pointer; }
   .plotbox { min-width: 0; }
   .plotbox canvas { display: block; width: 100%; cursor: crosshair; touch-action: pan-y; }
   .legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 13px; margin: 8px 0 2px; }
@@ -58,7 +61,7 @@
   ul.plain { padding-left: 1.3em; margin: 0; max-width: 100ch; }
   ul.plain li { margin-block: 4px; }
   @media (max-width: 920px) { .split { grid-template-columns: minmax(0, 1fr); } }
-  @media (max-width: 760px) { .pair { grid-template-columns: minmax(0, 1fr); } }
+  @media (max-width: 760px) { .pair, .denpair { grid-template-columns: minmax(0, 1fr); } }
   @media (max-width: 560px) {
     .opts { grid-template-columns: minmax(0, 1fr); }
     .opts > span:empty { display: none; }
@@ -173,10 +176,10 @@ solvent bands, which leave derivative-shaped residues after a plain scaled subtr
     <div class="ctl">
       <select id="denoise" autocomplete="off">
         <option value="off" selected>off</option>
-        <option value="hsvd">HSVD, hard rank</option>
-        <option value="sg">Savitzky–Golay, points</option>
+        <option value="hsvd">HSVD (hard rank)</option>
+        <option value="sg">Savitzky–Golay</option>
       </select>
-      <input type="number" id="denoiseN" min="1" max="400" step="1" value="20" autocomplete="off" aria-label="HSVD rank or Savitzky–Golay points" hidden>
+      <input type="number" id="denoiseN" min="3" max="401" step="2" value="7" autocomplete="off" aria-label="Savitzky–Golay points" hidden>
       <span id="denoiseNote" class="note"></span>
     </div>
   </div>
@@ -191,6 +194,42 @@ solvent bands, which leave derivative-shaped residues after a plain scaled subtr
     <div class="row"><button type="button" id="fromFit">Start from the last fit</button><span id="fromFitNote" class="note"></span></div>
   </div>
   <p id="fitErr" class="error" role="alert" hidden></p>
+</section>
+
+<section id="denSec" hidden>
+  <h2 id="denTitle">Solvent denoising</h2>
+  <div id="rankBox">
+    <div class="sliders">
+      <label for="rankR">Rank r (kept)</label><input type="range" id="rankR" min="1" max="80" step="1" value="40" autocomplete="off"><input type="number" id="rankN" min="1" max="80" step="1" value="40" autocomplete="off"><span class="unit"><button type="button" id="rankAuto">Cautious default</button></span>
+    </div>
+    <p id="rankNote" class="note"></p>
+  </div>
+  <div id="denPair" class="denpair">
+    <div id="svWrap">
+      <div class="legend" aria-hidden="true">
+        <span><svg width="10" height="10"><circle cx="5" cy="5" r="3" fill="#000"/></svg>kept</span>
+        <span><svg width="10" height="10"><circle cx="5" cy="5" r="3" fill="#aaa"/></svg>dropped</span>
+        <span><svg width="26" height="10"><line x1="0" y1="5" x2="26" y2="5" stroke="#d40000" stroke-width="1.5" stroke-dasharray="5 3"/></svg>noise edge τ</span>
+      </div>
+      <div id="svBox" class="plotbox"><canvas id="svCanvas" role="img" aria-label="Singular values of the Hankel matrix; click to choose the rank"></canvas></div>
+      <p class="caption">Singular values of the solvent's Hankel matrix, largest first. Click or drag along the points to keep the ranks up to there.</p>
+    </div>
+    <div>
+      <div class="legend" aria-hidden="true">
+        <span><svg width="26" height="10"><line x1="0" y1="5" x2="26" y2="5" stroke="#a8a8a8" stroke-width="1.5"/></svg>solvent as loaded</span>
+        <span><svg width="26" height="10"><line x1="0" y1="5" x2="26" y2="5" stroke="#000" stroke-width="1.5"/></svg>denoised</span>
+        <span><svg width="26" height="10"><line x1="0" y1="5" x2="26" y2="5" stroke="#1f5fbf" stroke-width="1.5"/></svg>loaded − denoised (lower pane)</span>
+      </div>
+      <div id="solBox" class="plotbox"><canvas id="solCanvas" role="img" aria-label="The solvent as loaded and denoised, and their difference"></canvas></div>
+      <p class="caption">Drag to zoom in x, double-click to zoom out. The lower pane should look like white noise. A dip or a band shape where the
+      solvent has a band (grey) means that band is being cut: raise the rank.</p>
+    </div>
+  </div>
+  <p id="denNote" class="caption"></p>
+  <div class="row" id="rankCheckRow">
+    <button type="button" id="rankCheck">Check this rank against r − 10 and r + 10</button>
+    <span id="rankCheckNote" class="note"></span>
+  </div>
 </section>
 
 <section id="results">
@@ -210,18 +249,6 @@ solvent bands, which leave derivative-shaped residues after a plain scaled subtr
   <div class="row">
     <button type="button" id="zoomOut">Full range</button>
     <span class="note">Drag across a plot to zoom in x, double-click to zoom out, hover to read values.</span>
-  </div>
-  <div id="denBox" hidden>
-    <h3>Solvent denoising</h3>
-    <div class="pair">
-      <div id="svWrap"><div id="svBox" class="plotbox"><canvas id="svCanvas" role="img" aria-label="Singular values of the Hankel matrix with the kept rank and the noise edge"></canvas></div></div>
-      <div><div id="drBox" class="plotbox"><canvas id="drCanvas" role="img" aria-label="Noisy minus denoised solvent spectrum"></canvas></div></div>
-    </div>
-    <p id="denNote" class="caption"></p>
-    <div class="row" id="rankRow">
-      <button type="button" id="rankCheck">Compare rank 15 and rank 30</button>
-      <span id="rankNote" class="note"></span>
-    </div>
   </div>
   <div class="split">
     <div>
@@ -328,13 +355,17 @@ solvent bands, which leave derivative-shaped residues after a plain scaled subtr
       <div class="eq"><i>x</i>(<i>n</i>) = DFT⁻¹[<i>R</i>](<i>n</i>) ≈ Σ<sub><i>k</i></sub> <i>A<sub>k</sub></i> e<sup>(<i>i</i>2πν<sub><i>k</i></sub> − γ<sub><i>k</i></sub>)<i>n</i></sup>,&emsp;
         <i>H<sub>ij</sub></i> = <i>x</i>(<i>i</i> + <i>j</i>),&emsp; <i>i</i> &lt; <i>N</i>/4,&emsp; <i>i</i> + <i>j</i> ≤ <i>N</i>/2,&emsp; <i>H</i> → <i>U<sub>r</sub></i> <i>S<sub>r</sub></i> <i>V<sub>r</sub></i>ᴴ</div>
       <p class="note">In the time domain each Lorentzian band is a damped complex exponential, and K of them make the Hankel matrix exactly
-      rank K, while white noise spreads over every rank. Keeping a hard rank r (2–3 × the number of solvent bands; 20 by default), averaging the
-      anti-diagonals back into a signal, rebuilding its conjugate-symmetric half and transforming back removes most of the reference's noise. A hard
-      rank keeps weak bands whole; soft weights near the noise edge shrink them. Too low a rank erases weak bands, which shows as dips at the band
-      positions in noisy − denoised; the result should not change between rank 15 and 30. The noise edge drawn is τ = σₜ(√m + √n) for the m × n
+      rank K, while white noise spreads over every rank. Keeping a hard rank r, averaging the anti-diagonals back into a signal, rebuilding its
+      conjugate-symmetric half and transforming back removes most of the reference's noise. A hard rank keeps weak bands whole; soft weights near the
+      noise edge shrink them. The rank errs high by default: 3 × the number of singular values clearly above the noise edge (> 1.5 τ), and never
+      fewer than 40. A rank too low cuts weak bands (Voigt-shaped bands need several ranks each: with a Gaussian instrument width σ = 3 cm⁻¹ the weak
+      cyclohexane bands lose 30–40 % at rank 8), and it shows as dips at the band positions in loaded − denoised. A rank too high costs little: from
+      20 to 40 the denoised solvent's noise goes from about 1.2 to 1.7 × 10⁻³ (from 3.0) in the notes' simulation, and that adds in quadrature to
+      the sample's own noise. The Check button compares the result at r − 10 and r + 10. The noise edge drawn is τ = σₜ(√m + √n) for the m × n
       matrix, with σₜ from the decayed end of the signal. The reference is first put on an even grid at its median spacing; if its two ends differ
       by more than their noise, a straight line through them is taken out before the transform and added back after, so the periodic transform sees
-      no jump. The products with H go through FFTs, and the leading singular vectors come from a randomized range finder with power iterations.
+      no jump. The products with H go through FFTs, and the leading 100 singular triplets come from a randomized range finder with power
+      iterations, once per solvent; any rank up to 80 is then rebuilt in milliseconds.
       Single noise spikes are undamped exponentials, so the ranks above the bands keep the largest of them: a small rest of the noise stays.</p>
     </li>
     <li>
@@ -857,25 +888,76 @@ function orthonormalize(Vr, Vi) {
     for (let t = 0; t < n; t++) { ar[t] /= nn; ai[t] /= nn; }
   }
 }
-// cyclic Jacobi eigen-decomposition of a real symmetric n×n matrix (row-major); V[row·n + k] = eigenvector k
+// eigen-decomposition of a real symmetric n×n matrix (row-major): Householder reduction to tridiagonal form, then the
+// implicit QL algorithm (tred2 + tqli). Returns eigenvalues w and V[row·n + k] = component row of eigenvector k.
 function symEig(A, n) {
-  const a = Float64Array.from(A), V = new Float64Array(n * n);
-  for (let i = 0; i < n; i++) V[i * n + i] = 1;
-  for (let sweep = 0; sweep < 100; sweep++) {
-    let off = 0, tot = 0;
-    for (let i = 0; i < n * n; i++) { const v = a[i] * a[i]; tot += v; if (i % (n + 1)) off += v; }
-    if (off <= 1e-30 * tot) break;
-    for (let p = 0; p < n - 1; p++) for (let q = p + 1; q < n; q++) {
-      const apq = a[p * n + q];
-      if (apq === 0) continue;
-      const th = (a[q * n + q] - a[p * n + p]) / (2 * apq), t = (th >= 0 ? 1 : -1) / (Math.abs(th) + Math.sqrt(th * th + 1));
-      const c = 1 / Math.sqrt(t * t + 1), s = t * c;
-      for (let k = 0; k < n; k++) { const kp = a[k * n + p], kq = a[k * n + q]; a[k * n + p] = c * kp - s * kq; a[k * n + q] = s * kp + c * kq; }
-      for (let k = 0; k < n; k++) { const pk = a[p * n + k], qk = a[q * n + k]; a[p * n + k] = c * pk - s * qk; a[q * n + k] = s * pk + c * qk; }
-      for (let k = 0; k < n; k++) { const kp = V[k * n + p], kq = V[k * n + q]; V[k * n + p] = c * kp - s * kq; V[k * n + q] = s * kp + c * kq; }
-    }
+  const a = Array.from({ length: n }, (_, i) => Float64Array.from(A.subarray ? A.subarray(i * n, i * n + n) : A.slice(i * n, i * n + n)));
+  const d = new Float64Array(n), e = new Float64Array(n);
+  for (let i = n - 1; i > 0; i--) {
+    const l = i - 1, ai = a[i];
+    let h = 0, scale = 0;
+    if (l > 0) {
+      for (let k = 0; k <= l; k++) scale += Math.abs(ai[k]);
+      if (scale === 0) e[i] = ai[l];
+      else {
+        for (let k = 0; k <= l; k++) { ai[k] /= scale; h += ai[k] * ai[k]; }
+        let f = ai[l];
+        let g = f >= 0 ? -Math.sqrt(h) : Math.sqrt(h);
+        e[i] = scale * g; h -= f * g; ai[l] = f - g; f = 0;
+        for (let j = 0; j <= l; j++) {
+          a[j][i] = ai[j] / h; g = 0;
+          for (let k = 0; k <= j; k++) g += a[j][k] * ai[k];
+          for (let k = j + 1; k <= l; k++) g += a[k][j] * ai[k];
+          e[j] = g / h; f += e[j] * ai[j];
+        }
+        const hh = f / (h + h);
+        for (let j = 0; j <= l; j++) {
+          f = ai[j]; e[j] = g = e[j] - hh * f;
+          const aj = a[j];
+          for (let k = 0; k <= j; k++) aj[k] -= f * e[k] + g * ai[k];
+        }
+      }
+    } else e[i] = ai[l];
+    d[i] = h;
   }
-  return { w: Array.from({ length: n }, (_, i) => a[i * n + i]), V };
+  d[0] = 0; e[0] = 0;
+  for (let i = 0; i < n; i++) {
+    const l = i - 1;
+    if (d[i]) for (let j = 0; j <= l; j++) {
+      let g = 0;
+      for (let k = 0; k <= l; k++) g += a[i][k] * a[k][j];
+      for (let k = 0; k <= l; k++) a[k][j] -= g * a[k][i];
+    }
+    d[i] = a[i][i]; a[i][i] = 1;
+    for (let j = 0; j <= l; j++) a[j][i] = a[i][j] = 0;
+  }
+  for (let i = 1; i < n; i++) e[i - 1] = e[i];
+  e[n - 1] = 0;
+  for (let l = 0; l < n; l++) {
+    let iter = 0, m;
+    do {
+      for (m = l; m < n - 1; m++) { const dd = Math.abs(d[m]) + Math.abs(d[m + 1]); if (Math.abs(e[m]) <= 1e-15 * dd) break; }
+      if (m !== l) {
+        if (iter++ === 60) throw new Error("eigenvalues did not converge");
+        let g = (d[l + 1] - d[l]) / (2 * e[l]), r = Math.hypot(g, 1);
+        g = d[m] - d[l] + e[l] / (g + (g >= 0 ? Math.abs(r) : -Math.abs(r)));
+        let s = 1, c = 1, p = 0, i;
+        for (i = m - 1; i >= l; i--) {
+          let f = s * e[i]; const b = c * e[i];
+          e[i + 1] = r = Math.hypot(f, g);
+          if (r === 0) { d[i + 1] -= p; e[m] = 0; break; }
+          s = f / r; c = g / r; g = d[i + 1] - p; r = (d[i] - g) * s + 2 * c * b;
+          d[i + 1] = g + (p = s * r); g = c * r - b;
+          for (let k = 0; k < n; k++) { const ak = a[k]; f = ak[i + 1]; ak[i + 1] = s * ak[i] + c * f; ak[i] = c * ak[i] - s * f; }
+        }
+        if (r === 0 && i >= l) continue;
+        d[l] -= p; e[l] = g; e[m] = 0;
+      }
+    } while (m !== l);
+  }
+  const V = new Float64Array(n * n);
+  for (let r = 0; r < n; r++) V.set(a[r], r * n);
+  return { w: Array.from(d), V };
 }
 // eigenpairs of the Hermitian k×k matrix Ar + i·Ai (row-major), largest first, through its real 2k×2k embedding
 function hermEig(Ar, Ai, k) {
@@ -903,17 +985,17 @@ function hermEig(Ar, Ai, k) {
   }
   return { vals, Ur, Ui };
 }
+const HSVD_K = 100;                 // singular triplets computed once per reference; the rank can be chosen up to HSVD_K − 20
 const hsvdCache = new Map();
-// Denoise an evenly spaced spectrum y: remove the straight line through its ends (no jump for the periodic DFT), inverse DFT
-// (each Lorentzian band becomes a damped complex exponential), Hankel matrix of the first half with about N/4 rows, keep a hard
-// rank r, average the anti-diagonals, rebuild the conjugate-symmetric half, DFT back, add the line back.
-// -> { y, sv (leading singular values), rank, rows, cols }
-function hsvdDenoise(y, rank) {
+// Decompose an evenly spaced spectrum y once: remove the straight line through its ends if they differ (no jump for the periodic
+// DFT), inverse DFT (each Lorentzian band becomes a damped complex exponential), Hankel matrix of the first half with about N/4
+// rows, and its leading singular triplets. hsvdDenoise then rebuilds any rank from it in a few milliseconds.
+function hsvdDecompose(y) {
   const N = y.length;
   if (N < 16) throw new Error("HSVD needs at least 16 solvent points");
   let s1 = 0, s2 = 0;
   for (let i = 0; i < N; i++) { s1 += y[i] * (i + 1); s2 += y[i] * y[i] * ((i % 7) + 1); }
-  const key = `${N}|${rank}|${s1}|${s2}`;
+  const key = `${N}|${s1}|${s2}`;
   if (hsvdCache.has(key)) return hsvdCache.get(key);
   // A jump between the two ends (a sloping baseline) leaks into many ranks through the periodic DFT. When the ends differ
   // by more than their own noise, take out the straight line through the end averages first and add it back after.
@@ -925,8 +1007,7 @@ function hsvdDenoise(y, rank) {
   const useLine = Math.abs(yr - yl) > 3 * sigma * Math.sqrt(2 / m), xl = (m - 1) / 2, xr = N - 1 - (m - 1) / 2;
   const line = Float64Array.from({ length: N }, (_, i) => useLine ? yl + (yr - yl) * (i - xl) / (xr - xl) : 0);
   const [tr, ti] = dftAny(y.map((v, i) => v - line[i]), new Float64Array(N), true);
-  const L = Math.floor(N / 2) + 1, p = Math.max(2, Math.min(L - 1, Math.round(N / 4))), q = L - p + 1;
-  const r = Math.max(1, Math.min(Math.round(rank), p, q)), k = Math.min(p, q, Math.max(r + 15, 40));
+  const L = Math.floor(N / 2) + 1, p = Math.max(2, Math.min(L - 1, Math.round(N / 4))), q = L - p + 1, k = Math.min(p, q, HSVD_K);
   const H = hankelOps(tr, ti, p, q), rnd = mulberry32(977);
   // randomized range finder with power iterations: Q spans the leading left singular vectors of H
   let Qr = [], Qi = [];
@@ -936,7 +1017,7 @@ function hsvdDenoise(y, rank) {
     const [a, b] = H.mul(vr, vi); Qr.push(a); Qi.push(b);
   }
   orthonormalize(Qr, Qi);
-  for (let it = 0; it < 4; it++) {
+  for (let it = 0; it < 3; it++) {
     const Zr = [], Zi = [];
     for (let t = 0; t < k; t++) { const [a, b] = H.mulH(Qr[t], Qi[t]); Zr.push(a); Zi.push(b); }
     orthonormalize(Zr, Zi);
@@ -957,35 +1038,52 @@ function hsvdDenoise(y, rank) {
   // noise edge: the largest pure-noise singular value ≈ σ_t(√p + √q), σ_t from the late, decayed part of the signal
   const nl = Math.max(4, Math.min(150, Math.floor(L / 4)));
   let st = 0; for (let n = L - nl; n < L; n++) st += tr[n] * tr[n] + ti[n] * ti[n];
-  const tau = Math.sqrt(st / nl) * (Math.sqrt(p) + Math.sqrt(q));
-  // rank-r part H_r = Σ_t u_t c_t, u_t = Q·U_t, c_t = U_tᴴ B; its anti-diagonal sums are the convolutions u_t * c_t
-  let M = 1; while (M < L) M <<= 1;
-  const accR = new Float64Array(M), accI = new Float64Array(M);
-  for (let t = 0; t < Math.min(r, E.Ur.length); t++) {
-    const ur = new Float64Array(M), ui = new Float64Array(M), cr = new Float64Array(M), ci = new Float64Array(M);
-    for (let a = 0; a < k; a++) {
-      const wr = E.Ur[t][a], wi = E.Ui[t][a], qr = Qr[a], qi = Qi[a], gr = Gr[a], gi = Gi[a];
-      for (let i = 0; i < p; i++) { ur[i] += wr * qr[i] - wi * qi[i]; ui[i] += wr * qi[i] + wi * qr[i]; }
-      for (let j = 0; j < q; j++) { cr[j] += wr * gr[j] - wi * gi[j]; ci[j] += wr * gi[j] + wi * gr[j]; }
+  const tau = Math.sqrt(st / nl) * (Math.sqrt(p) + Math.sqrt(q)), above = sv.filter(v => v > 1.5 * tau).length;
+  const maxRank = k > 30 ? k - 20 : k;
+  // Cautious default: losing a weak band costs far more than keeping a few noise ranks, so keep 3 × the ranks that stand
+  // clearly above the noise edge, and never fewer than 40.
+  const safeRank = Math.min(maxRank, Math.max(40, 3 * above));
+  const dec = { N, p, q, L, k, Qr, Qi, Gr, Gi, E, sv, tau, above, line, useLine, maxRank, safeRank, rebuilt: new Map() };
+  if (hsvdCache.size > 6) hsvdCache.clear();
+  hsvdCache.set(key, dec);
+  return dec;
+}
+// HSVD-denoised y at a hard rank ("auto" or ≤ 0 = the cautious default): the rank-r part of the Hankel matrix, H_r = Σ_t u_t c_t
+// with u_t = Q·U_t and c_t = U_tᴴ B; its anti-diagonal averages, the conjugate-symmetric half rebuilt, DFT back, the line added back.
+// -> { y, sv, rank, rows, cols, line, tau, above, maxRank, safeRank }
+function hsvdDenoise(y, rank) {
+  const D = hsvdDecompose(y), { N, p, q, L, k, Qr, Qi, Gr, Gi, E } = D;
+  const r = Math.max(1, Math.min(rank === "auto" || !(rank > 0) ? D.safeRank : Math.round(rank), D.maxRank, E.Ur.length));
+  let yd = D.rebuilt.get(r);
+  if (!yd) {
+    let M = 1; while (M < L) M <<= 1;
+    const accR = new Float64Array(M), accI = new Float64Array(M);
+    for (let t = 0; t < r; t++) {
+      const ur = new Float64Array(M), ui = new Float64Array(M), cr = new Float64Array(M), ci = new Float64Array(M);
+      for (let a = 0; a < k; a++) {
+        const wr = E.Ur[t][a], wi = E.Ui[t][a], qr = Qr[a], qi = Qi[a], gr = Gr[a], gi = Gi[a];
+        for (let i = 0; i < p; i++) { ur[i] += wr * qr[i] - wi * qi[i]; ui[i] += wr * qi[i] + wi * qr[i]; }
+        for (let j = 0; j < q; j++) { cr[j] += wr * gr[j] - wi * gi[j]; ci[j] += wr * gi[j] + wi * gr[j]; }
+      }
+      for (let j = 0; j < q; j++) ci[j] = -ci[j];
+      fft(ur, ui, false); fft(cr, ci, false);
+      for (let n = 0; n < M; n++) { accR[n] += ur[n] * cr[n] - ui[n] * ci[n]; accI[n] += ur[n] * ci[n] + ui[n] * cr[n]; }
     }
-    for (let j = 0; j < q; j++) ci[j] = -ci[j];
-    fft(ur, ui, false); fft(cr, ci, false);
-    for (let n = 0; n < M; n++) { accR[n] += ur[n] * cr[n] - ui[n] * ci[n]; accI[n] += ur[n] * ci[n] + ui[n] * cr[n]; }
+    fft(accR, accI, true);
+    const fr = new Float64Array(N), fi = new Float64Array(N);
+    for (let n = 0; n < L; n++) { const cnt = Math.min(n + 1, p, q, L - n); fr[n] = accR[n] / cnt; fi[n] = accI[n] / cnt; }
+    fi[0] = 0;
+    if (N % 2 === 0) fi[L - 1] = 0;
+    for (let i = L; i < N; i++) { fr[i] = fr[N - i]; fi[i] = -fi[N - i]; }
+    yd = dftAny(fr, fi, false)[0].map((v, i) => v + D.line[i]);
+    if (D.rebuilt.size > 40) D.rebuilt.clear();
+    D.rebuilt.set(r, yd);
   }
-  fft(accR, accI, true);
-  const fr = new Float64Array(N), fi = new Float64Array(N);
-  for (let n = 0; n < L; n++) { const cnt = Math.min(n + 1, p, q, L - n); fr[n] = accR[n] / cnt; fi[n] = accI[n] / cnt; }
-  fi[0] = 0;
-  if (N % 2 === 0) fi[L - 1] = 0;
-  for (let i = L; i < N; i++) { fr[i] = fr[N - i]; fi[i] = -fi[N - i]; }
-  const [dr] = dftAny(fr, fi, false), out = { y: dr.map((v, i) => v + line[i]), sv, rank: r, rows: p, cols: q, line: useLine, tau, above: sv.filter(v => v > 1.5 * tau).length };
-  if (hsvdCache.size > 12) hsvdCache.clear();
-  hsvdCache.set(key, out);
-  return out;
+  return { y: yd, sv: D.sv, rank: r, rows: p, cols: q, line: D.useLine, tau: D.tau, above: D.above, maxRank: D.maxRank, safeRank: D.safeRank };
 }
 
 /* ---------- the solvent reference on a fine uniform grid ---------- */
-// smoothPts ≥ 3: Savitzky–Golay; hsvdRank ≥ 1: HSVD on an evenly spaced copy at the median spacing
+// smoothPts ≥ 3: Savitzky–Golay; hsvdRank ≥ 1 or "auto": HSVD on an evenly spaced copy at the median spacing
 function makeReference(x, y, smoothPts, hsvdRank) {
   const idx = [];
   for (let i = 0; i < x.length; i++) if (Number.isFinite(x[i]) && Number.isFinite(y[i])) idx.push(i);
@@ -997,10 +1095,11 @@ function makeReference(x, y, smoothPts, hsvdRank) {
   for (let i = 0; i < d.length; i++) d[i] = xs[i + 1] - xs[i];
   const h = median(d), span = xs[xs.length - 1] - xs[0];
   let den = null;
-  if (hsvdRank >= 1) {
+  if (hsvdRank === "auto" || hsvdRank >= 1) {
     const n = Math.max(16, Math.round(span / h) + 1), sp0 = spline(xs, ys);
     const xu = Float64Array.from({ length: n }, (_, i) => xs[0] + span * i / (n - 1)), yu = xu.map(v => splineAt(sp0, v)), hs = hsvdDenoise(yu, hsvdRank);
-    den = { kind: "hsvd", x: xu, noisy: yu, denoised: hs.y, sv: hs.sv, rank: hs.rank, rows: hs.rows, cols: hs.cols, line: hs.line, tau: hs.tau, above: hs.above };
+    den = Object.assign({ kind: "hsvd", x: xu, noisy: yu, denoised: hs.y }, hs);
+    delete den.y;
     xs = xu; ys = hs.y;
   } else if (smoothPts >= 3) {
     const sm = savitzkyGolay(ys, smoothPts, 2);
@@ -1168,7 +1267,7 @@ function setupProblem(sample, solvent, opt) {
   const x = Float64Array.from(sample.x), y = Float64Array.from(sample.y), n = x.length;
   if (n !== y.length) throw new Error("the sample x and y have different lengths");
   if (n < 8) throw new Error("the sample wave needs at least 8 points");
-  const ref = makeReference(solvent.x, solvent.y, opt.smooth | 0, opt.hsvd | 0);
+  const ref = makeReference(solvent.x, solvent.y, opt.smooth | 0, opt.hsvd === "auto" ? "auto" : opt.hsvd | 0);
   const inside = new Uint8Array(n), inReg = new Uint8Array(n), regions = opt.regions || [], exclude = opt.exclude || [];
   let lo = Infinity, hi = -Infinity, nin = 0;
   for (let i = 0; i < n; i++) {
@@ -1515,6 +1614,7 @@ const files = { S: null, R: null, X: null };   // { name, waves, skipped }
 let example = null, useExample = true;
 let view = null, hover = null, drag = null;     // x zoom [lo, hi], hover index, drag in progress
 let last = null, lastFit = null, manualSet = false, cmpRows = null;
+let hsvdRank = "auto", solView = null, solDrag = null, svHover = null, svLayout = null, solLayout = null;   // HSVD rank, solvent plot zoom
 const layouts = {};
 
 /* ---------- formatting ---------- */
@@ -1643,6 +1743,7 @@ async function loadFile(K, file) {
     const buf = await file.arrayBuffer(), res = readWaveFile(file.name, buf);
     files[K] = { name: file.name, waves: res.waves, skipped: res.skipped };
     const wasExample = useExample;
+    if (K !== "S") { hsvdRank = "auto"; solView = null; }
     if (useExample) {
       useExample = false;
       $("regions").value = ""; lastFit = null; manualSet = false; cmpRows = null; $("cmpNote").textContent = "";
@@ -1672,6 +1773,7 @@ function loadExample() {
   for (const id of ["fileS", "fileR", "fileX"]) $(id).value = "";
   $("regions").value = example.regions; $("exclude").value = ""; $("baseline").value = "1"; $("methodSel").value = DEFAULT_METHOD;
   view = null; hover = null; lastFit = null; manualSet = false; cmpRows = null; $("cmpTable").innerHTML = ""; $("cmpNote").textContent = "";
+  hsvdRank = "auto"; solView = null;
   $("outName").value = "sample_example_sub";
   refreshMenus("all"); showMethod(); update();
 }
@@ -1679,10 +1781,11 @@ function loadExample() {
 /* ---------- options ---------- */
 function readOptions() {
   const regions = parseRegions($("regions").value), exclude = parseRegions($("exclude").value), den = $("denoise").value, dn = Math.round(Number($("denoiseN").value));
+  // HSVD rank: "auto" (the cautious default) until a rank is picked in the denoising section
   const num = (id, d) => { const v = Number($(id).value); return $(id).value.trim() !== "" && Number.isFinite(v) ? v : d; };
   return {
     regions, exclude, baseline: Number($("baseline").value), fitOn: Number($("fitOn").value), subBase: $("subBase").checked,
-    smooth: den === "sg" && dn >= 3 ? dn : 0, hsvd: den === "hsvd" && dn >= 1 ? dn : 0, iterate: $("iterate").checked, roughOrder: Number($("roughOrder").value), deriv: $("deriv").value,
+    smooth: den === "sg" && dn >= 3 ? dn : 0, hsvd: den === "hsvd" ? hsvdRank : 0, iterate: $("iterate").checked, roughOrder: Number($("roughOrder").value), deriv: $("deriv").value,
     maxShift: Math.max(0, num("maxShift", 0)), terms: [...document.querySelectorAll(".term")].filter(c => c.checked).map(c => Number(c.value)),
     manual: { scale: num("mScaleN", 1), shift: num("mShiftN", 0), gfwhm: Math.max(0, num("mGaussN", 0)), lfwhm: Math.max(0, num("mLorN", 0)), offset: num("mOffN", 0) },
   };
@@ -1753,10 +1856,10 @@ function prepCanvas(host, canvas, H) {
   ctx.font = FONT; ctx.lineJoin = "round";
   return { ctx, W };
 }
-function yTicks(ctx, L, top, bot, lo, hi, ymap) {
+function yTicks(ctx, L, top, bot, lo, hi, ymap, every) {
   ctx.strokeStyle = "#000"; ctx.fillStyle = "#000"; ctx.lineWidth = 1; ctx.setLineDash([]);
   ctx.beginPath(); ctx.moveTo(L - 0.5, top); ctx.lineTo(L - 0.5, bot); ctx.stroke();
-  const st = niceStep(hi - lo, Math.max(2, Math.floor((bot - top) / 40)));
+  const st = niceStep(hi - lo, Math.max(2, Math.floor((bot - top) / (every || 40))));
   ctx.textAlign = "right"; ctx.textBaseline = "middle";
   for (let v = Math.ceil(lo / st - 1e-9) * st; v <= hi + 1e-9 * st; v += st) {
     const py = Math.round(ymap(v)) + 0.5;
@@ -1884,30 +1987,44 @@ function renderCompare() {
 }
 function render() { drawAll(); renderParams(); renderCompare(); renderDenoise(); }
 
-/* ---------- solvent denoising diagnostics ---------- */
+/* ---------- solvent denoising section ---------- */
+function solventNoise(d) { let ss = 0; d.noisy.forEach((v, i) => { ss += (v - d.denoised[i]) ** 2; }); return Math.sqrt(ss / d.noisy.length); }
 function renderDenoise() {
-  const box = $("denBox"), d = last && last.refDenoise;
-  box.hidden = !d;
-  if (!d) return;
-  $("svWrap").hidden = d.kind !== "hsvd"; $("rankRow").hidden = d.kind !== "hsvd";
-  let ss = 0; d.noisy.forEach((v, i) => { ss += (v - d.denoised[i]) ** 2; });
-  const rmsDiff = Math.sqrt(ss / d.noisy.length);
-  if (d.kind === "hsvd") {
-    drawSV(d);
-    $("denNote").textContent = `HSVD keeps rank ${d.rank} of the ${d.rows} × ${d.cols} Hankel matrix. ${d.above} singular value${d.above === 1 ? " stands" : "s stand"} clearly above the ` +
-      `noise edge τ = σₜ(√m + √n) (more than 1.5 τ): about one per solvent band; the flat run near τ is noise. Right: noisy − denoised solvent, rms ${fmtG(rmsDiff, 3)}; ` +
-      `it should look like white noise, and dips at the band positions (grey) mean the rank is too low.` + (d.line ? " A straight line through the two ends was taken out before the DFT and added back, because the ends differ (sloping baseline)." : "");
-  } else {
-    $("denNote").textContent = `Savitzky–Golay, ${d.points} points, quadratic. Right: noisy − smoothed solvent, rms ${fmtG(rmsDiff, 3)}; band shapes in it (at the grey bands) mean the window is too wide.`;
+  const kind = $("denoise").value, d = last && last.refDenoise;
+  $("denSec").hidden = kind === "off";
+  if (kind === "off") return;
+  const hs = kind === "hsvd";
+  $("denTitle").textContent = hs ? "Solvent denoising: HSVD" : "Solvent denoising: Savitzky–Golay";
+  $("rankBox").hidden = $("svWrap").hidden = $("rankCheckRow").hidden = !hs;
+  $("denPair").classList.toggle("single", !hs);
+  if (!d || d.kind !== (hs ? "hsvd" : "sg")) {
+    $("denNote").textContent = last ? "" : "Load a solvent wave (and fix any error above) to see it here.";
+    svLayout = solLayout = null;
+    for (const [box, cv] of [["svBox", "svCanvas"], ["solBox", "solCanvas"]]) { const { ctx, W } = prepCanvas($(box), $(cv), 120); ctx.fillStyle = "#555"; ctx.textAlign = "center"; ctx.fillText("No solvent yet", W / 2, 60); }
+    return;
   }
-  drawDenoiseResidual(d);
+  const noise = solventNoise(d);
+  if (hs) {
+    for (const id of ["rankR", "rankN"]) { $(id).max = String(d.maxRank); $(id).value = String(d.rank); }
+    $("rankNote").textContent = (hsvdRank === "auto" ? `Cautious default: r = ${d.rank}.` : `Your rank: r = ${d.rank}; the cautious default for this solvent is ${d.safeRank}.`) +
+      ` The default keeps 3 × the ${d.above} singular value${d.above === 1 ? "" : "s"} that stand clearly above the noise edge (> 1.5 τ), and never fewer than 40:` +
+      ` too low a rank cuts weak bands, too high only lets a little more of the solvent's noise through. Up to ${d.maxRank}.`;
+    $("denNote").textContent = `Rank ${d.rank} of the ${d.rows} × ${d.cols} Hankel matrix. Loaded − denoised: rms ${fmtG(noise, 3)}, which is the noise taken out of the solvent.` +
+      (d.line ? " A straight line through the two ends was taken out before the transform and added back after, because the ends differ (sloping baseline)." : "");
+    drawSV(d);
+  } else {
+    $("denNote").textContent = `Savitzky–Golay, ${d.points} points, quadratic. Loaded − smoothed: rms ${fmtG(noise, 3)}. Band shapes in the lower pane mean the window is too wide.`;
+  }
+  drawSolvent(d);
 }
 function drawSV(d) {
-  const host = $("svBox"), { ctx, W } = prepCanvas(host, $("svCanvas"), 240), L = 56, R = W - 12, T = 22, B = 240 - 40;
-  const sv = d.sv.filter(v => v > 0), n = sv.length;
+  const host = $("svBox"), H = 300, { ctx, W } = prepCanvas(host, $("svCanvas"), H), L = 56, R = W - 12, T = 22, B = H - 40;
+  const sv = d.sv.map(v => Math.max(v, 1e-300)), n = sv.length;
   let lo = Math.log10(Math.min(...sv, d.tau || Infinity)), hi = Math.log10(Math.max(...sv));
   lo = Math.floor(lo - 0.1); hi = Math.ceil(hi + 0.05);
   const xm = i => L + (i - 0.5) / n * (R - L), ym = v => B - (Math.log10(v) - lo) / (hi - lo) * (B - T);
+  svLayout = { L, R, n, maxRank: d.maxRank };
+  ctx.fillStyle = "#f4f4f4"; ctx.fillRect(L, T, Math.max(0, xm(d.rank + 0.5) - L), B - T);
   ctx.strokeStyle = "#000"; ctx.fillStyle = "#000"; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(L - 0.5, T); ctx.lineTo(L - 0.5, B); ctx.lineTo(R, B + 0.5); ctx.stroke();
   ctx.textAlign = "right"; ctx.textBaseline = "middle";
@@ -1915,54 +2032,80 @@ function drawSV(d) {
   ctx.textAlign = "center"; ctx.textBaseline = "top";
   const st = niceStep(n, Math.max(3, Math.floor((R - L) / 50)));
   for (let i = st; i <= n; i += st) { const px = Math.round(xm(i)) + 0.5; ctx.beginPath(); ctx.moveTo(px, B); ctx.lineTo(px, B + 5); ctx.stroke(); ctx.fillText(String(i), px, B + 7); }
-  ctx.fillText("singular value index", (L + R) / 2, B + 22);
+  ctx.fillText("singular value index (rank)", (L + R) / 2, B + 22);
   if (d.tau > 0) {
     ctx.strokeStyle = "#d40000"; ctx.setLineDash([5, 3]); const py = Math.round(ym(d.tau)) + 0.5;
     ctx.beginPath(); ctx.moveTo(L, py); ctx.lineTo(R, py); ctx.stroke(); ctx.setLineDash([]);
-    ctx.fillStyle = "#d40000"; ctx.textAlign = "right"; ctx.textBaseline = "bottom"; ctx.fillText("noise edge τ", R - 2, py - 2);
   }
+  if (d.maxRank < n) { ctx.fillStyle = "rgba(255,255,255,0.6)"; ctx.fillRect(xm(d.maxRank + 0.5), T, R - xm(d.maxRank + 0.5), B - T); }
   const pr = Math.round(xm(d.rank + 0.5)) + 0.5;
-  ctx.strokeStyle = "#555"; ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.moveTo(pr, T); ctx.lineTo(pr, B); ctx.stroke(); ctx.setLineDash([]);
-  sv.forEach((v, k) => { ctx.fillStyle = k < d.rank ? "#000" : "#aaa"; ctx.beginPath(); ctx.arc(xm(k + 1), ym(v), 2.6, 0, 2 * Math.PI); ctx.fill(); });
-  ctx.fillStyle = "#333"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
-  ctx.fillText(`Hankel singular values: kept (black) up to rank ${d.rank}`, L + 4, T - 11);
+  ctx.strokeStyle = "#000"; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(pr, T); ctx.lineTo(pr, B); ctx.stroke(); ctx.setLineDash([]);
+  const rad = n > 70 ? 2.2 : 2.8;
+  sv.forEach((v, k) => { ctx.fillStyle = k < d.rank ? "#000" : "#aaa"; ctx.beginPath(); ctx.arc(xm(k + 1), ym(v), rad, 0, 2 * Math.PI); ctx.fill(); });
+  ctx.fillStyle = "#000"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  const hv = svHover !== null && svHover >= 1 && svHover <= n ? `   (index ${svHover}: ${fmtG(sv[svHover - 1], 3)}${svHover <= d.maxRank ? ", click to keep ranks 1–" + svHover : ""})` : "";
+  ctx.fillText(`r = ${d.rank}` + hv, L + 4, T - 11);
 }
-function drawDenoiseResidual(d) {
-  const host = $("drBox"), { ctx, W } = prepCanvas(host, $("drCanvas"), 240), L = 56, R = W - 12, T = 22, B = 240 - 40, x = d.x, n = x.length;
+function drawSolvent(d) {
+  const host = $("solBox"), H = 380, { ctx, W } = prepCanvas(host, $("solCanvas"), H), L = W < 480 ? 56 : 66, R = W - 12, T = 22, B = H - 40, x = d.x, n = x.length;
+  const mid = T + 0.66 * (B - T), gap = 10, T2 = mid + gap;
+  const [lo, hi] = solView || [x[0], x[n - 1]];
+  solLayout = { L, R, lo, hi };
   const res = d.noisy.map((v, i) => v - d.denoised[i]);
-  let ss = 0; for (const v of res) ss += v * v;
-  const lim = 4 * Math.sqrt(ss / n) || 1, xlo = x[0], xhi = x[n - 1];
-  const xm = v => L + (v - xlo) / (xhi - xlo) * (R - L), ym = v => B - (v + lim) / (2 * lim) * (B - T);
+  let ylo = Infinity, yhi = -Infinity, ss = 0;
+  for (let i = 0; i < n; i++) { ss += res[i] * res[i]; if (x[i] < lo || x[i] > hi) continue; ylo = Math.min(ylo, d.noisy[i], d.denoised[i]); yhi = Math.max(yhi, d.noisy[i], d.denoised[i]); }
+  if (!(yhi > ylo)) { ylo -= 1; yhi += 1; }
+  const pad = 0.05 * (yhi - ylo); ylo -= pad; yhi += pad;
+  const lim = 4 * Math.sqrt(ss / n) || 1;
+  const xm = v => L + (v - lo) / (hi - lo) * (R - L), ym = v => mid - (v - ylo) / (yhi - ylo) * (mid - T), yr = v => B - (v + lim) / (2 * lim) * (B - T2);
+  // band positions behind the lower pane: the denoised solvent, scaled
   let dmin = Infinity, dmax = -Infinity; for (const v of d.denoised) { dmin = Math.min(dmin, v); dmax = Math.max(dmax, v); }
+  ctx.save(); ctx.beginPath(); ctx.rect(L, T2, R - L, B - T2); ctx.clip();
   ctx.fillStyle = "#e6e6e6"; ctx.beginPath(); ctx.moveTo(xm(x[0]), B);
-  for (let i = 0; i < n; i++) ctx.lineTo(xm(x[i]), B - (d.denoised[i] - dmin) / ((dmax - dmin) || 1) * (B - T));
+  for (let i = 0; i < n; i++) ctx.lineTo(xm(x[i]), B - (d.denoised[i] - dmin) / ((dmax - dmin) || 1) * (B - T2));
   ctx.lineTo(xm(x[n - 1]), B); ctx.closePath(); ctx.fill();
-  yTicks(ctx, L, T, B, -lim, lim, ym);
-  xTicks(ctx, L, R, B, xlo, xhi, xm, last ? xAxisLabel(last.R) : "x");
-  ctx.save(); ctx.beginPath(); ctx.rect(L, T, R - L, B - T); ctx.clip();
-  ctx.strokeStyle = "#333"; ctx.lineWidth = 1; ctx.beginPath();
-  for (let i = 0; i < n; i++) { const px = xm(x[i]), py = ym(Math.max(-lim, Math.min(lim, res[i]))); if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py); }
-  ctx.stroke(); ctx.restore();
+  ctx.restore();
+  yTicks(ctx, L, T, mid, ylo, yhi, ym);
+  yTicks(ctx, L, T2, B, -lim, lim, yr, 22);
+  ctx.strokeStyle = "#999"; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(L, Math.round(yr(0)) + 0.5); ctx.lineTo(R, Math.round(yr(0)) + 0.5); ctx.stroke(); ctx.setLineDash([]);
+  xTicks(ctx, L, R, B, lo, hi, xm, last ? xAxisLabel(last.R) : "x");
+  const line = (arr, top, bot, f, col, w) => {
+    ctx.save(); ctx.beginPath(); ctx.rect(L, top, R - L, bot - top); ctx.clip();
+    ctx.strokeStyle = col; ctx.lineWidth = w; ctx.beginPath();
+    for (let i = 0; i < n; i++) { const px = xm(x[i]), py = f(arr[i]); if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py); }
+    ctx.stroke(); ctx.restore();
+  };
+  line(d.noisy, T, mid, ym, "#a8a8a8", 1);
+  line(d.denoised, T, mid, ym, "#000", 1.3);
+  line(res, T2, B, v => yr(Math.max(-lim, Math.min(lim, v))), "#1f5fbf", 1);
+  if (solDrag && solDrag.moved) {
+    const a = Math.max(L, Math.min(solDrag.x0, solDrag.x1)), b = Math.min(R, Math.max(solDrag.x0, solDrag.x1));
+    ctx.fillStyle = "rgba(0, 60, 200, 0.12)"; ctx.fillRect(a, T, b - a, B - T);
+  }
   ctx.fillStyle = "#333"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
-  ctx.fillText("noisy − denoised solvent (grey: the solvent, scaled)", L + 4, T - 11);
+  ctx.fillText(`${last ? last.R.w.name : "solvent"}: as loaded and denoised`, L + 4, T - 11);
 }
 function rankCheck() {
-  const note = $("rankNote");
+  const note = $("rankCheckNote");
   if (!last || !last.refDenoise || last.refDenoise.kind !== "hsvd") { note.textContent = ""; return; }
   try {
-    const o = Object.assign({}, last.opt), S = { x: last.S.x, y: last.S.y }, R = { x: last.R.x, y: last.R.y };
-    const a = subtract(S, R, last.id, Object.assign({}, o, { hsvd: 15 })), b = subtract(S, R, last.id, Object.assign({}, o, { hsvd: 30 }));
-    let mx = 0, ss = 0, n = 0;
-    for (let i = 0; i < a.result.length; i++) {
-      if (!last.inReg[i] || !Number.isFinite(a.result[i]) || !Number.isFinite(b.result[i])) continue;
-      const dd = a.result[i] - b.result[i]; mx = Math.max(mx, Math.abs(dd)); ss += dd * dd; n++;
-    }
-    let sn = 0; last.refDenoise.noisy.forEach((v, i) => { sn += (v - last.refDenoise.denoised[i]) ** 2; });
-    const noise = Math.sqrt(sn / last.refDenoise.noisy.length), g = (r, k) => { const p = r.params.find(q => q.key === k); return p ? p.value : NaN; };
-    const extra = ["shift", "gfwhm"].filter(k => Number.isFinite(g(a, k))).map(k => `${k === "shift" ? "shift" : "FWHM"} ${fmtG(g(a, k), 4)} → ${fmtG(g(b, k), 4)}`).join(", ");
-    const rmsD = n ? Math.sqrt(ss / n) : NaN;
-    note.textContent = `Rank 15 → 30: the result in the fit regions changes by ${fmtG(rmsD, 2)} rms, ${fmtG(rmsD / noise, 2)} × the solvent's noise ` +
-      `(largest single point ${fmtG(mx, 2)})${extra ? "; " + extra : ""}. A change near or above the noise means something besides noise lives in those ranks.`;
+    const d = last.refDenoise, r = d.rank, lo = Math.max(1, r - 10), hi = Math.min(d.maxRank, r + 10), noise = solventNoise(d);
+    const S = { x: last.S.x, y: last.S.y }, R = { x: last.R.x, y: last.R.y };
+    const change = rr => {
+      const o = subtract(S, R, last.id, Object.assign({}, last.opt, { hsvd: rr }));
+      let ss = 0, n = 0;
+      for (let i = 0; i < o.result.length; i++) {
+        if (!last.inReg[i] || !Number.isFinite(o.result[i]) || !Number.isFinite(last.result[i])) continue;
+        ss += (o.result[i] - last.result[i]) ** 2; n++;
+      }
+      return n ? Math.sqrt(ss / n) / noise : NaN;
+    };
+    const cl = lo < r ? change(lo) : NaN, ch = hi > r ? change(hi) : NaN;
+    const verdict = ch > 0.3 ? `Raising the rank to ${hi} still changes the result: rank ${r} cuts bands. Raise it (or use the cautious default, ${d.safeRank}).`
+      : cl > 0.3 ? `Rank ${r} keeps the bands, but ${lo} would cut them: ${r} is near the edge, so a few ranks more is the safer side.`
+      : "Both changes are small next to the solvent's noise: this rank is in the safe range.";
+    note.textContent = `Result in the fit regions, rms change relative to the solvent's noise: rank ${lo} ${Number.isFinite(cl) ? fmtG(cl, 2) + " ×" : "—"}, ` +
+      `rank ${hi} ${Number.isFinite(ch) ? fmtG(ch, 2) + " ×" : "—"}. ${verdict}`;
   } catch (e) { note.textContent = e.message; }
 }
 
@@ -1983,7 +2126,7 @@ function noteText() {
     `method: ${L.method.label}`,
     `fit regions: ${L.opt.regions.length ? L.opt.regions.map(r => r.join("-")).join(", ") : "everything"}` +
       (L.opt.exclude.length ? `; excluded: ${L.opt.exclude.map(r => r.join("-")).join(", ")}` : ""),
-    `baseline: ${$("baseline").selectedOptions[0].text}; fit on ${$("fitOn").selectedOptions[0].text}; derivatives ${L.opt.deriv}; solvent denoising ${L.opt.hsvd ? "HSVD rank " + L.opt.hsvd : L.opt.smooth ? "Savitzky-Golay " + L.opt.smooth + " points" : "off"}`,
+    `baseline: ${$("baseline").selectedOptions[0].text}; fit on ${$("fitOn").selectedOptions[0].text}; derivatives ${L.opt.deriv}; solvent denoising ${L.refDenoise && L.refDenoise.kind === "hsvd" ? "HSVD rank " + L.refDenoise.rank + (L.opt.hsvd === "auto" ? " (cautious default)" : "") : L.opt.smooth ? "Savitzky-Golay " + L.opt.smooth + " points" : "off"}`,
   ];
   for (const p of L.params) lines.push(`${p.key}=${p.value}` + (Number.isFinite(p.se) ? ` +/- ${p.se}` : "") + (unitText(p.unit) ? ` ${unitText(p.unit)}` : ""));
   lines.push(`rms=${L.rms}; points=${L.fitPoints}; units of x: ${xu}`);
@@ -2084,17 +2227,54 @@ $("methodSel").addEventListener("change", () => { showMethod(); update(); render
 for (const id of ["baseline", "fitOn", "roughOrder", "subBase", "iterate", "deriv"]) $(id).addEventListener("change", () => update());
 document.querySelectorAll(".term").forEach(c => c.addEventListener("change", () => update()));
 for (const id of ["regions", "exclude", "denoiseN", "maxShift"]) { $(id).addEventListener("input", () => schedule(400)); $(id).addEventListener("change", () => update()); }
-const denoiseN = { hsvd: 20, sg: 7 };
-$("denoise").addEventListener("change", () => { showDenoise(); update(); });
-$("denoiseN").addEventListener("input", () => { const k = $("denoise").value; if (k in denoiseN) denoiseN[k] = Number($("denoiseN").value); });
+$("denoise").addEventListener("change", () => {
+  showDenoise();
+  if ($("denoise").value === "hsvd") { $("denoiseNote").textContent = "decomposing the solvent…"; setTimeout(() => { update(); showDenoise(); }, 20); }
+  else update();
+});
 function showDenoise() {
   const k = $("denoise").value;
-  $("denoiseN").hidden = k === "off";
-  if (k in denoiseN) $("denoiseN").value = String(denoiseN[k]);
-  $("denoiseNote").textContent = k === "hsvd" ? "2–3 × the number of solvent bands; check that the result is the same at 15 and 30"
-    : k === "sg" ? "odd number of points, quadratic; keep it well below the points across a band" : "";
+  $("denoiseN").hidden = k !== "sg";
+  $("denoiseNote").textContent = k === "hsvd" ? "pick the rank in the Solvent denoising section below (defaults on the high, safe side)"
+    : k === "sg" ? "points (odd), quadratic; keep it well below the points across a band" : "";
+  $("rankCheckNote").textContent = "";
 }
+function setRank(r) {
+  hsvdRank = r; $("rankCheckNote").textContent = "";
+  if (r !== "auto") { $("rankR").value = $("rankN").value = String(r); }
+  schedule(30);
+}
+$("rankR").addEventListener("input", () => setRank(Math.round(Number($("rankR").value))));
+$("rankN").addEventListener("input", () => { const v = Math.round(Number($("rankN").value)); if (v >= 1) setRank(v); });
+$("rankAuto").addEventListener("click", () => setRank("auto"));
 $("rankCheck").addEventListener("click", rankCheck);
+// singular-value plot: click or drag to choose the rank, hover to read a value
+const svIndex = e => { const l = svLayout; if (!l) return null; const px = e.clientX - $("svCanvas").getBoundingClientRect().left; return Math.min(l.n, Math.max(1, Math.round((px - l.L) / (l.R - l.L) * l.n + 0.5))); };
+let svPressed = false;
+$("svCanvas").addEventListener("pointerdown", e => { const i = svIndex(e); if (!i) return; svPressed = true; $("svCanvas").setPointerCapture(e.pointerId); setRank(Math.min(i, svLayout.maxRank)); });
+$("svCanvas").addEventListener("pointermove", e => {
+  const i = svIndex(e); if (!i) return;
+  if (svPressed) setRank(Math.min(i, svLayout.maxRank));
+  if (i !== svHover) { svHover = i; if (last && last.refDenoise && last.refDenoise.kind === "hsvd") drawSV(last.refDenoise); }
+});
+$("svCanvas").addEventListener("pointerup", () => { svPressed = false; });
+$("svCanvas").addEventListener("pointerleave", () => { if (!svPressed) { svHover = null; if (last && last.refDenoise && last.refDenoise.kind === "hsvd") drawSV(last.refDenoise); } });
+// solvent plot: drag to zoom in x, double-click to zoom out
+const solX = e => e.clientX - $("solCanvas").getBoundingClientRect().left;
+const redrawSol = () => { if (last && last.refDenoise) drawSolvent(last.refDenoise); };
+$("solCanvas").addEventListener("pointerdown", e => { const l = solLayout; if (!l || e.button !== 0) return; const px = solX(e); if (px < l.L || px > l.R) return; solDrag = { x0: px, x1: px, moved: false }; $("solCanvas").setPointerCapture(e.pointerId); });
+$("solCanvas").addEventListener("pointermove", e => { if (!solDrag) return; solDrag.x1 = solX(e); solDrag.moved = solDrag.moved || Math.abs(solDrag.x1 - solDrag.x0) > 4; redrawSol(); });
+$("solCanvas").addEventListener("pointerup", () => {
+  const l = solLayout;
+  if (solDrag && solDrag.moved && l) {
+    const a = Math.max(l.L, Math.min(solDrag.x0, solDrag.x1)), b = Math.min(l.R, Math.max(solDrag.x0, solDrag.x1));
+    const xa = l.lo + (a - l.L) / (l.R - l.L) * (l.hi - l.lo), xb = l.lo + (b - l.L) / (l.R - l.L) * (l.hi - l.lo);
+    if (xb > xa) solView = [xa, xb];
+  }
+  solDrag = null; redrawSol();
+});
+$("solCanvas").addEventListener("pointercancel", () => { solDrag = null; redrawSol(); });
+$("solCanvas").addEventListener("dblclick", () => { solView = null; redrawSol(); });
 for (const [r, n] of MAN) {
   $(r).addEventListener("input", () => { $(n).value = String(Number(Number($(r).value).toPrecision(6))); manualSet = true; update(); });
   $(n).addEventListener("input", () => { $(r).value = $(n).value; manualSet = true; schedule(80); });
@@ -2116,7 +2296,7 @@ $("compare").addEventListener("click", () => {
 });
 $("cmpTable").addEventListener("click", e => { const tr = e.target.closest("tr[data-id]"); if (tr) { $("methodSel").value = tr.dataset.id; showMethod(); update(); } });
 $("cmpTable").addEventListener("keydown", e => { if (e.key === "Enter") { const tr = e.target.closest("tr[data-id]"); if (tr) { $("methodSel").value = tr.dataset.id; showMethod(); update(); } } });
-for (const id of ["topBox", "botBox", "svBox", "drBox"]) {
+for (const id of ["topBox", "botBox", "svBox", "solBox"]) {
   let lastW = 0;
   new ResizeObserver(() => { const w = $(id).clientWidth; if (w && w !== lastW) { lastW = w; if (id === "topBox" || id === "botBox") drawAll(); else renderDenoise(); } }).observe($(id));
 }

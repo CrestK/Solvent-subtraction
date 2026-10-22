@@ -12,7 +12,9 @@ wave). The solvent is interpolated onto the sample's x values, so the two may ha
 axis may run either way. Fit regions are typed (`770-835, 1005-1050`) or added by zooming into a band on the plot, and solute bands are
 excluded the same way (roughly ±25 cm⁻¹ around each). Options: a baseline polynomial (none to cubic) fitted with the solvent
 and optionally subtracted with it, fitting on the first or second difference instead of the spectrum, and denoising the
-solvent with HSVD (hard rank, 20 by default) or Savitzky–Golay. Everything runs in the browser; nothing is uploaded.
+solvent with HSVD or Savitzky–Golay. Choosing HSVD opens its own section: the solvent as loaded and denoised (zoomable)
+with loaded − denoised underneath, the Hankel singular values with the noise edge (click or drag on them to set the rank), a
+rank slider, and a check of the result at r − 10 and r + 10. Everything runs in the browser; nothing is uploaded.
 
 **Methods** (the menu):
 
@@ -36,8 +38,6 @@ solvent with HSVD (hard rank, 20 by default) or Savitzky–Golay. Everything run
 
 - Two plots sharing one x axis: the sample with the fitted solvent (+ baseline), the fit regions and the excluded
   ranges, and the result S − M. Drag to zoom in x, double-click to zoom out, hover to read values.
-- With a denoised solvent: the Hankel singular values with the kept rank and the noise edge τ = σₜ(√m + √n), the noisy −
-  denoised solvent (should be white, with no dips at the bands), and a button that compares the result at rank 15 and 30.
 - A table of the fitted parameters with standard errors from the fit covariance, the number of points, the RMS of the
   residual in the fit regions and the roughness of the result.
 - "Compare all methods": every method on the same regions and options, side by side; click a row to switch to it.
@@ -54,13 +54,16 @@ Gaussian and scaled by 0.8 in the sample, with a made-up solute, a sloping basel
 The HSVD denoiser follows the "Solvent subtraction with an HSVD-denoised, Taylor-expanded reference" notes: inverse DFT of
 the reference (Lorentzian bands become damped complex exponentials), a Hankel matrix of the first half with about N/4 rows,
 a hard rank r, anti-diagonal averaging, the conjugate-symmetric half rebuilt, DFT back. Products with the Hankel matrix go
-through FFTs and the leading singular vectors come from a randomized range finder, so it takes about 0.1–0.2 s for 1400
-points (and is cached). Two additions: the reference is resampled evenly first if its x axis is not, and if its two ends
+through FFTs and the leading 100 singular triplets come from a randomized range finder (Householder + QL for the small
+eigenproblem), once per solvent: about 0.4 s for 1400 points; any rank up to 80 is then rebuilt in 10–25 ms. The rank errs
+high by default: 3 × the singular values clearly above the noise edge (> 1.5 τ), never fewer than 40. Too low a rank cuts
+weak bands (Voigt-shaped bands, σ_G = 3 cm⁻¹: 30–40 % lost at rank 8), while 20 → 40 only raises the denoised solvent's noise
+from about 1.2 to 1.7 × 10⁻³. Two additions: the reference is resampled evenly first if its x axis is not, and if its two ends
 differ by more than their noise (a sloping baseline) a straight line through them is taken out before the transform and
 added back after. On the notes' simulation the page reproduces their numbers (tests 12c and 12f).
 
-The usual recipe there: exclude the solute bands, cubic baseline subtracted with the solvent, Taylor 2nd order, HSVD rank 20,
-Iterate on when the shift is more than about a tenth of a band width.
+The usual recipe there: exclude the solute bands, cubic baseline subtracted with the solvent, Taylor 2nd order, HSVD at the
+cautious default rank, Iterate on when the shift is more than about a tenth of a band width.
 
 ## Use
 
@@ -77,7 +80,7 @@ root from any static host, for example GitHub Pages with "Deploy from a branch" 
 ## Tests
 
 ```
-node tests/validate.mjs     # about 7 s
+node tests/validate.mjs     # about 11 s
 ```
 
 - File formats: .ibw write/read round trip (NaN, ±INF, extended units, note, checksum 0); hand-built big-endian
@@ -99,4 +102,6 @@ node tests/validate.mjs     # about 7 s
   (notes: ≈ 1.2 and ≈ 0.6) with 8 singular values clearly above the noise edge; a sloping baseline leaves no edge
   leakage; with the `np.gradient` stencil the fitted FWHM stays right (2.98 vs 2.83 true) where the fine stencil drops to
   1.26 from regression dilution; the result's noise is 3.52 (noisy reference), 3.11 (HSVD), 2.93 (perfect reference)
-  × 10⁻³ (notes: 3.50, 3.02, 3.00); excluded ranges drop out of the fit; HSVD works on an uneven x axis.
+  × 10⁻³ (notes: 3.50, 3.02, 3.00); excluded ranges drop out of the fit; HSVD works on an uneven x axis; the cautious
+  default rank is 40 there and keeps the weak bands of a Voigt-shaped reference whole, where rank 8 cuts them by 30 % or
+  more; rebuilding at another rank reuses the decomposition.

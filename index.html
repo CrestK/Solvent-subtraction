@@ -126,6 +126,12 @@ solvent bands, which leave derivative-shaped residues after a plain scaled subtr
       <button type="button" id="addZoom">Add current zoom</button>
       <button type="button" id="clearRegions">Clear</button>
     </div>
+    <label for="exclude">Exclude (solute bands)</label>
+    <div class="ctl">
+      <input type="text" id="exclude" placeholder="e.g. 1155-1205, 1565-1615 (about ±25 around each solute band)" autocomplete="off" spellcheck="false">
+      <button type="button" id="excZoom">Exclude current zoom</button>
+      <button type="button" id="clearExclude">Clear</button>
+    </div>
     <label for="baseline" data-opt="base">Baseline in the fit</label>
     <select id="baseline" data-opt="base" autocomplete="off">
       <option value="-1">none</option>
@@ -154,12 +160,25 @@ solvent bands, which leave derivative-shaped residues after a plain scaled subtr
       <label class="check"><input type="checkbox" class="term" value="2" checked autocomplete="off"> R″</label>
       <label class="check"><input type="checkbox" class="term" value="3" autocomplete="off"> R‴</label>
     </div>
+    <label for="deriv" data-opt="deriv">Derivatives</label>
+    <select id="deriv" data-opt="deriv" autocomplete="off">
+      <option value="grad" selected>central differences at the point spacing, like np.gradient (robust to noise)</option>
+      <option value="fine">fine, at half the point spacing (for a clean or denoised solvent)</option>
+    </select>
     <span data-opt="iter"></span>
     <label class="check" data-opt="iter"><input type="checkbox" id="iterate" autocomplete="off"> Iterate: shift and broaden the solvent by the fitted δ and σ², refit, until they converge</label>
     <label for="maxShift" data-opt="sb">Search shifts within ±</label>
     <div class="ctl" data-opt="sb"><input type="number" id="maxShift" min="0" step="any" autocomplete="off"><span id="maxShiftNote" class="note"></span></div>
-    <label for="smooth">Smooth the solvent</label>
-    <div class="ctl"><input type="number" id="smooth" min="0" max="51" step="1" value="0" autocomplete="off"><span class="note">Savitzky–Golay points, quadratic (0 = off)</span></div>
+    <label for="denoise">Denoise the solvent</label>
+    <div class="ctl">
+      <select id="denoise" autocomplete="off">
+        <option value="off" selected>off</option>
+        <option value="hsvd">HSVD, hard rank</option>
+        <option value="sg">Savitzky–Golay, points</option>
+      </select>
+      <input type="number" id="denoiseN" min="1" max="400" step="1" value="20" autocomplete="off" aria-label="HSVD rank or Savitzky–Golay points" hidden>
+      <span id="denoiseNote" class="note"></span>
+    </div>
   </div>
   <div id="manualBox" data-opt="manual">
     <div class="sliders">
@@ -181,6 +200,7 @@ solvent bands, which leave derivative-shaped residues after a plain scaled subtr
     <span><svg width="26" height="10"><line x1="0" y1="5" x2="26" y2="5" stroke="#d40000" stroke-width="1.5"/></svg>solvent fit (+ baseline)</span>
     <span id="legBase"><svg width="26" height="10"><line x1="0" y1="5" x2="26" y2="5" stroke="#777" stroke-width="1.5" stroke-dasharray="5 3"/></svg>baseline</span>
     <span><span class="swatch" style="background:#e6e6e6"></span>fit regions</span>
+    <span><span class="swatch" style="background:#f6d4d4"></span>excluded</span>
   </div>
   <div id="topBox" class="plotbox"><canvas id="topCanvas" role="img" aria-label="Sample spectrum and the fitted solvent contribution"></canvas></div>
   <div class="legend" aria-hidden="true">
@@ -190,6 +210,18 @@ solvent bands, which leave derivative-shaped residues after a plain scaled subtr
   <div class="row">
     <button type="button" id="zoomOut">Full range</button>
     <span class="note">Drag across a plot to zoom in x, double-click to zoom out, hover to read values.</span>
+  </div>
+  <div id="denBox" hidden>
+    <h3>Solvent denoising</h3>
+    <div class="pair">
+      <div id="svWrap"><div id="svBox" class="plotbox"><canvas id="svCanvas" role="img" aria-label="Singular values of the Hankel matrix with the kept rank and the noise edge"></canvas></div></div>
+      <div><div id="drBox" class="plotbox"><canvas id="drCanvas" role="img" aria-label="Noisy minus denoised solvent spectrum"></canvas></div></div>
+    </div>
+    <p id="denNote" class="caption"></p>
+    <div class="row" id="rankRow">
+      <button type="button" id="rankCheck">Compare rank 15 and rank 30</button>
+      <span id="rankNote" class="note"></span>
+    </div>
   </div>
   <div class="split">
     <div>
@@ -226,7 +258,7 @@ solvent bands, which leave derivative-shaped residues after a plain scaled subtr
   <p class="note">S(x) is the sample spectrum, R(x) the solvent reference interpolated onto the sample's x axis (natural cubic spline),
   x the Raman shift. B(x) = b<sub>0</sub> + b<sub>1</sub>t + b<sub>2</sub>t² + b<sub>3</sub>t³ is the optional baseline, a polynomial in
   t = (x − x<sub>c</sub>)/w with x<sub>c</sub> and w the centre and half-width of the fit regions. Fits use only the points inside the fit
-  regions. The result is D(x) = S(x) − M(x), with M the fitted solvent contribution; the baseline is subtracted too only if that box is ticked.</p>
+  regions and outside the excluded ranges (mask the solute bands, roughly ±25 cm⁻¹ around each). The result is D(x) = S(x) − M(x), with M the fitted solvent contribution; the baseline is subtracted too only if that box is ticked.</p>
   <ol class="eqs">
     <li>
       <p>Least-squares scale factor</p>
@@ -257,12 +289,17 @@ solvent bands, which leave derivative-shaped residues after a plain scaled subtr
       <div class="eq">∫ <i>p</i>(<i>s</i>) <i>R</i>(<i>x</i> − <i>s</i>) d<i>s</i> = <i>R</i> − μ<sub>1</sub><i>R</i>′ + (μ<sub>2</sub>/2) <i>R</i>″ − (μ<sub>3</sub>/6) <i>R</i>‴ + …,&emsp; μ<sub><i>n</i></sub> = ∫ <i>s<sup>n</sup></i> <i>p</i>(<i>s</i>) d<i>s</i></div>
       <div class="eq"><i>S</i> ≈ <i>a</i><sub>0</sub><i>R</i> + <i>a</i><sub>1</sub><i>R</i>′ + <i>a</i><sub>2</sub><i>R</i>″ + <i>a</i><sub>3</sub><i>R</i>‴ + <i>B</i>,&emsp; <i>M</i> = <i>a</i><sub>0</sub><i>R</i> + <i>a</i><sub>1</sub><i>R</i>′ + <i>a</i><sub>2</sub><i>R</i>″ + <i>a</i><sub>3</sub><i>R</i>‴</div>
       <div class="eq">δ = μ<sub>1</sub> = −<i>a</i><sub>1</sub>/<i>a</i><sub>0</sub>,&emsp; σ² = 2<i>a</i><sub>2</sub>/<i>a</i><sub>0</sub> − δ²,&emsp; κ<sub>3</sub> = −6<i>a</i><sub>3</sub>/<i>a</i><sub>0</sub> − 3δσ² − δ³,&emsp; FWHM = 2√(2 ln 2) σ ≈ 2.355 σ</div>
-      <div class="eq"><i>R</i>′ ≈ [<i>R</i>(<i>x</i>+<i>h</i>) − <i>R</i>(<i>x</i>−<i>h</i>)]/2<i>h</i>,&emsp; <i>R</i>″ ≈ [<i>R</i>(<i>x</i>+<i>h</i>) − 2<i>R</i>(<i>x</i>) + <i>R</i>(<i>x</i>−<i>h</i>)]/<i>h</i>²,&emsp; <i>R</i>‴ ≈ [<i>R</i>(<i>x</i>+2<i>h</i>) − 2<i>R</i>(<i>x</i>+<i>h</i>) + 2<i>R</i>(<i>x</i>−<i>h</i>) − <i>R</i>(<i>x</i>−2<i>h</i>)]/2<i>h</i>³</div>
+      <div class="eq"><i>R</i>′ ≈ [<i>R</i>(<i>x</i>+<i>h</i>) − <i>R</i>(<i>x</i>−<i>h</i>)]/2<i>h</i>,&emsp; <i>R</i>″ ≈ [<i>R</i>(<i>x</i>+2<i>h</i>) − 2<i>R</i>(<i>x</i>) + <i>R</i>(<i>x</i>−2<i>h</i>)]/4<i>h</i>²,&emsp; <i>R</i>‴ ≈ [<i>R</i>(<i>x</i>+3<i>h</i>) − 3<i>R</i>(<i>x</i>+<i>h</i>) + 3<i>R</i>(<i>x</i>−<i>h</i>) − <i>R</i>(<i>x</i>−3<i>h</i>)]/8<i>h</i>³&emsp; (np.gradient)</div>
+      <div class="eq"><i>R</i>″ ≈ [<i>R</i>(<i>x</i>+<i>h</i>′) − 2<i>R</i>(<i>x</i>) + <i>R</i>(<i>x</i>−<i>h</i>′)]/<i>h</i>′²,&emsp; <i>R</i>‴ ≈ [<i>R</i>(<i>x</i>+2<i>h</i>′) − 2<i>R</i>(<i>x</i>+<i>h</i>′) + 2<i>R</i>(<i>x</i>−<i>h</i>′) − <i>R</i>(<i>x</i>−2<i>h</i>′)]/2<i>h</i>′³,&emsp; <i>h</i>′ = <i>h</i>/2&emsp; (fine)</div>
       <p class="note">A small shift δ and a symmetric broadening of any shape (variance σ²) of the solvent bands, expanded to second or third
       order, is linear in the coefficients a<sub>k</sub>: one least-squares fit, no starting values. The subtracted terms a<sub>1</sub>R′ and
       a<sub>2</sub>R″ are exactly the dispersive, derivative-shaped solvent residues that a shift or width change leaves behind (for example in
       transient pump-on − pump-off FSRS spectra). σ² &lt; 0 means the solvent bands are narrower in the sample than in the reference, which the
-      Taylor form handles and a convolution cannot. κ<sub>3</sub> measures asymmetry. The step h is half the reference's point spacing. The
+      Taylor form handles and a convolution cannot. κ<sub>3</sub> measures asymmetry. By default the derivatives are central
+      differences at the reference's point spacing h, applied once, twice and three times (as np.gradient does). The "fine" stencils
+      at h/2 are less biased on narrow bands but pass more of the reference's noise into R″; noise in a fitted column biases its
+      coefficient toward zero (regression dilution), so with a noisy reference a<sub>2</sub> and the width come out low. Use fine
+      with a clean or denoised reference. The
       expansion holds while δ and σ are small compared with the solvent band widths. "Iterate" removes that limit: it replaces R by the
       reference shifted by the fitted δ and convolved with a Gaussian of the fitted variance σ², R → [R ⊗ G<sub>σ</sub>](x − δ), and refits until
       the new a<sub>1</sub> and a<sub>2</sub> terms vanish (Gauss–Newton steps). It converges to the exact shift + Gaussian broadening result; a
@@ -287,10 +324,24 @@ solvent bands, which leave derivative-shaped residues after a plain scaled subtr
       ignores smooth backgrounds. Baseline terms of degree below k drop out (they have no differences), so the baseline is then only partly determined.</p>
     </li>
     <li>
-      <p>Smoothing the reference</p>
+      <p>Denoising the reference: HSVD</p>
+      <div class="eq"><i>x</i>(<i>n</i>) = DFT⁻¹[<i>R</i>](<i>n</i>) ≈ Σ<sub><i>k</i></sub> <i>A<sub>k</sub></i> e<sup>(<i>i</i>2πν<sub><i>k</i></sub> − γ<sub><i>k</i></sub>)<i>n</i></sup>,&emsp;
+        <i>H<sub>ij</sub></i> = <i>x</i>(<i>i</i> + <i>j</i>),&emsp; <i>i</i> &lt; <i>N</i>/4,&emsp; <i>i</i> + <i>j</i> ≤ <i>N</i>/2,&emsp; <i>H</i> → <i>U<sub>r</sub></i> <i>S<sub>r</sub></i> <i>V<sub>r</sub></i>ᴴ</div>
+      <p class="note">In the time domain each Lorentzian band is a damped complex exponential, and K of them make the Hankel matrix exactly
+      rank K, while white noise spreads over every rank. Keeping a hard rank r (2–3 × the number of solvent bands; 20 by default), averaging the
+      anti-diagonals back into a signal, rebuilding its conjugate-symmetric half and transforming back removes most of the reference's noise. A hard
+      rank keeps weak bands whole; soft weights near the noise edge shrink them. Too low a rank erases weak bands, which shows as dips at the band
+      positions in noisy − denoised; the result should not change between rank 15 and 30. The noise edge drawn is τ = σₜ(√m + √n) for the m × n
+      matrix, with σₜ from the decayed end of the signal. The reference is first put on an even grid at its median spacing; if its two ends differ
+      by more than their noise, a straight line through them is taken out before the transform and added back after, so the periodic transform sees
+      no jump. The products with H go through FFTs, and the leading singular vectors come from a randomized range finder with power iterations.
+      Single noise spikes are undamped exponentials, so the ranks above the bands keep the largest of them: a small rest of the noise stays.</p>
+    </li>
+    <li>
+      <p>Denoising the reference: Savitzky–Golay</p>
       <div class="eq"><i>R̃<sub>i</sub></i> = value at <i>i</i> of the least-squares quadratic through the <i>N</i> points around <i>i</i></div>
-      <p class="note">Savitzky–Golay, applied to the solvent before every method (and before its derivatives are taken). Keep N well below the
-      number of points across a solvent band, or the bands themselves get broadened.</p>
+      <p class="note">Keep N well below the number of points across a solvent band, or the bands themselves get broadened.
+      Either denoiser is applied to the solvent before every method and before its derivatives are taken.</p>
     </li>
   </ol>
 </section>
@@ -307,6 +358,8 @@ solvent bands, which leave derivative-shaped residues after a plain scaled subtr
     <li>X axis: the wave's own scaling (SetScale), the point number, or any monotonic wave of the same length, from either file or from
     the separate x wave file. The solvent is interpolated onto the sample's x values, so the two may have different points and ranges; only
     the overlap is used. The x axis may run either way.</li>
+    <li>Raman-loss spectra with the peaks pointing down need no flipping: the scale comes out positive when both spectra point the same way.
+    The shift δ is in the units and direction of the x axis, so on a negative-cm⁻¹ axis its sign is reversed relative to |cm⁻¹|.</li>
     <li>Not read: HDF5 experiments (.h5xp) and text waves. Save the waves as .ibw or .itx (Data ▸ Save Waves) or the experiment as .pxp.</li>
     <li>Everything runs in your browser; the files are not uploaded anywhere.</li>
   </ul>
@@ -743,19 +796,217 @@ function fft(re, im, inverse) { // in place, length a power of two
   if (inverse) for (let i = 0; i < n; i++) { re[i] /= n; im[i] /= n; }
 }
 
+/* ---------- HSVD denoising: Hankel singular value decomposition of the spectrum's time-domain signal ---------- */
+// any-length DFT: radix-2 FFT for powers of two, a direct sum otherwise; inverse divides by n
+function dftAny(re, im, inverse) {
+  const n = re.length, r = Float64Array.from(re), i = Float64Array.from(im);
+  if ((n & (n - 1)) === 0) { fft(r, i, inverse); return [r, i]; }
+  const c = new Float64Array(n), s = new Float64Array(n), outR = new Float64Array(n), outI = new Float64Array(n), sg = inverse ? 1 : -1;
+  for (let m = 0; m < n; m++) { c[m] = Math.cos(2 * Math.PI * m / n); s[m] = sg * Math.sin(2 * Math.PI * m / n); }
+  for (let k = 0; k < n; k++) {
+    let ar = 0, ai = 0;
+    for (let j = 0, m = 0; j < n; j++) {
+      ar += r[j] * c[m] - i[j] * s[m]; ai += r[j] * s[m] + i[j] * c[m];
+      m += k; if (m >= n) m -= n;
+    }
+    outR[k] = inverse ? ar / n : ar; outI[k] = inverse ? ai / n : ai;
+  }
+  return [outR, outI];
+}
+// H[i][j] = x[i + j] (i < p, j < q): products H·v and Hᴴ·u as correlations by FFT
+function hankelOps(xr, xi, p, q) {
+  const L = p + q - 1;
+  let M = 1; while (M < L + Math.max(p, q)) M <<= 1;
+  const Xr = new Float64Array(M), Xi = new Float64Array(M);
+  Xr.set(xr.subarray(0, L)); Xi.set(xi.subarray(0, L)); fft(Xr, Xi, false);
+  const corr = (wr, wi, off, len) => {
+    const r = new Float64Array(M), i = new Float64Array(M);
+    r.set(wr); i.set(wi); fft(r, i, false);
+    for (let k = 0; k < M; k++) { const a = r[k], b = i[k]; r[k] = a * Xr[k] - b * Xi[k]; i[k] = a * Xi[k] + b * Xr[k]; }
+    fft(r, i, true);
+    return [r.slice(off, off + len), i.slice(off, off + len)];
+  };
+  return {
+    mul(vr, vi) {
+      const wr = new Float64Array(q), wi = new Float64Array(q);
+      for (let j = 0; j < q; j++) { wr[j] = vr[q - 1 - j]; wi[j] = vi[q - 1 - j]; }
+      return corr(wr, wi, q - 1, p);
+    },
+    mulH(ur, ui) {
+      const wr = new Float64Array(p), wi = new Float64Array(p);
+      for (let i = 0; i < p; i++) { wr[i] = ur[p - 1 - i]; wi[i] = -ui[p - 1 - i]; }
+      const [cr, ci] = corr(wr, wi, p - 1, q);
+      for (let j = 0; j < q; j++) ci[j] = -ci[j];
+      return [cr, ci];
+    },
+  };
+}
+// complex modified Gram–Schmidt (twice) on the columns (Vr[t], Vi[t])
+function orthonormalize(Vr, Vi) {
+  const k = Vr.length, n = Vr[0].length;
+  for (let a = 0; a < k; a++) {
+    const ar = Vr[a], ai = Vi[a];
+    for (let pass = 0; pass < 2; pass++) for (let b = 0; b < a; b++) {
+      const br = Vr[b], bi = Vi[b];
+      let dr = 0, di = 0;
+      for (let t = 0; t < n; t++) { dr += br[t] * ar[t] + bi[t] * ai[t]; di += br[t] * ai[t] - bi[t] * ar[t]; }
+      for (let t = 0; t < n; t++) { ar[t] -= dr * br[t] - di * bi[t]; ai[t] -= dr * bi[t] + di * br[t]; }
+    }
+    let nn = 0; for (let t = 0; t < n; t++) nn += ar[t] * ar[t] + ai[t] * ai[t];
+    nn = Math.sqrt(nn) || 1;
+    for (let t = 0; t < n; t++) { ar[t] /= nn; ai[t] /= nn; }
+  }
+}
+// cyclic Jacobi eigen-decomposition of a real symmetric n×n matrix (row-major); V[row·n + k] = eigenvector k
+function symEig(A, n) {
+  const a = Float64Array.from(A), V = new Float64Array(n * n);
+  for (let i = 0; i < n; i++) V[i * n + i] = 1;
+  for (let sweep = 0; sweep < 100; sweep++) {
+    let off = 0, tot = 0;
+    for (let i = 0; i < n * n; i++) { const v = a[i] * a[i]; tot += v; if (i % (n + 1)) off += v; }
+    if (off <= 1e-30 * tot) break;
+    for (let p = 0; p < n - 1; p++) for (let q = p + 1; q < n; q++) {
+      const apq = a[p * n + q];
+      if (apq === 0) continue;
+      const th = (a[q * n + q] - a[p * n + p]) / (2 * apq), t = (th >= 0 ? 1 : -1) / (Math.abs(th) + Math.sqrt(th * th + 1));
+      const c = 1 / Math.sqrt(t * t + 1), s = t * c;
+      for (let k = 0; k < n; k++) { const kp = a[k * n + p], kq = a[k * n + q]; a[k * n + p] = c * kp - s * kq; a[k * n + q] = s * kp + c * kq; }
+      for (let k = 0; k < n; k++) { const pk = a[p * n + k], qk = a[q * n + k]; a[p * n + k] = c * pk - s * qk; a[q * n + k] = s * pk + c * qk; }
+      for (let k = 0; k < n; k++) { const kp = V[k * n + p], kq = V[k * n + q]; V[k * n + p] = c * kp - s * kq; V[k * n + q] = s * kp + c * kq; }
+    }
+  }
+  return { w: Array.from({ length: n }, (_, i) => a[i * n + i]), V };
+}
+// eigenpairs of the Hermitian k×k matrix Ar + i·Ai (row-major), largest first, through its real 2k×2k embedding
+function hermEig(Ar, Ai, k) {
+  const n = 2 * k, M = new Float64Array(n * n);
+  for (let a = 0; a < k; a++) for (let b = 0; b < k; b++) {
+    M[a * n + b] = M[(a + k) * n + b + k] = Ar[a * k + b];
+    M[a * n + b + k] = -Ai[a * k + b]; M[(a + k) * n + b] = Ai[a * k + b];
+  }
+  const { w, V } = symEig(M, n), order = w.map((v, i) => i).sort((a, b) => w[b] - w[a]), vals = [], Ur = [], Ui = [];
+  for (const j of order) {
+    if (vals.length === k) break;
+    const ur = new Float64Array(k), ui = new Float64Array(k);
+    for (let a = 0; a < k; a++) { ur[a] = V[a * n + j]; ui[a] = V[(a + k) * n + j]; }
+    // each complex eigenvector appears twice (u and i·u); keep what the earlier ones do not already hold
+    for (let b = 0; b < Ur.length; b++) {
+      let dr = 0, di = 0;
+      for (let a = 0; a < k; a++) { dr += Ur[b][a] * ur[a] + Ui[b][a] * ui[a]; di += Ur[b][a] * ui[a] - Ui[b][a] * ur[a]; }
+      for (let a = 0; a < k; a++) { ur[a] -= dr * Ur[b][a] - di * Ui[b][a]; ui[a] -= dr * Ui[b][a] + di * Ur[b][a]; }
+    }
+    let nn = 0; for (let a = 0; a < k; a++) nn += ur[a] * ur[a] + ui[a] * ui[a];
+    nn = Math.sqrt(nn);
+    if (nn < 0.5) continue;
+    for (let a = 0; a < k; a++) { ur[a] /= nn; ui[a] /= nn; }
+    vals.push(w[j]); Ur.push(ur); Ui.push(ui);
+  }
+  return { vals, Ur, Ui };
+}
+const hsvdCache = new Map();
+// Denoise an evenly spaced spectrum y: remove the straight line through its ends (no jump for the periodic DFT), inverse DFT
+// (each Lorentzian band becomes a damped complex exponential), Hankel matrix of the first half with about N/4 rows, keep a hard
+// rank r, average the anti-diagonals, rebuild the conjugate-symmetric half, DFT back, add the line back.
+// -> { y, sv (leading singular values), rank, rows, cols }
+function hsvdDenoise(y, rank) {
+  const N = y.length;
+  if (N < 16) throw new Error("HSVD needs at least 16 solvent points");
+  let s1 = 0, s2 = 0;
+  for (let i = 0; i < N; i++) { s1 += y[i] * (i + 1); s2 += y[i] * y[i] * ((i % 7) + 1); }
+  const key = `${N}|${rank}|${s1}|${s2}`;
+  if (hsvdCache.has(key)) return hsvdCache.get(key);
+  // A jump between the two ends (a sloping baseline) leaks into many ranks through the periodic DFT. When the ends differ
+  // by more than their own noise, take out the straight line through the end averages first and add it back after.
+  const m = Math.max(8, Math.round(N / 50)), d2 = new Float64Array(N - 2);
+  for (let i = 1; i < N - 1; i++) d2[i - 1] = Math.abs(y[i + 1] - 2 * y[i] + y[i - 1]);
+  const sigma = median(d2) / 0.6745 / Math.sqrt(6);
+  let yl = 0, yr = 0;
+  for (let i = 0; i < m; i++) { yl += y[i] / m; yr += y[N - 1 - i] / m; }
+  const useLine = Math.abs(yr - yl) > 3 * sigma * Math.sqrt(2 / m), xl = (m - 1) / 2, xr = N - 1 - (m - 1) / 2;
+  const line = Float64Array.from({ length: N }, (_, i) => useLine ? yl + (yr - yl) * (i - xl) / (xr - xl) : 0);
+  const [tr, ti] = dftAny(y.map((v, i) => v - line[i]), new Float64Array(N), true);
+  const L = Math.floor(N / 2) + 1, p = Math.max(2, Math.min(L - 1, Math.round(N / 4))), q = L - p + 1;
+  const r = Math.max(1, Math.min(Math.round(rank), p, q)), k = Math.min(p, q, Math.max(r + 15, 40));
+  const H = hankelOps(tr, ti, p, q), rnd = mulberry32(977);
+  // randomized range finder with power iterations: Q spans the leading left singular vectors of H
+  let Qr = [], Qi = [];
+  for (let t = 0; t < k; t++) {
+    const vr = new Float64Array(q), vi = new Float64Array(q);
+    for (let j = 0; j < q; j++) { vr[j] = rnd() - 0.5; vi[j] = rnd() - 0.5; }
+    const [a, b] = H.mul(vr, vi); Qr.push(a); Qi.push(b);
+  }
+  orthonormalize(Qr, Qi);
+  for (let it = 0; it < 4; it++) {
+    const Zr = [], Zi = [];
+    for (let t = 0; t < k; t++) { const [a, b] = H.mulH(Qr[t], Qi[t]); Zr.push(a); Zi.push(b); }
+    orthonormalize(Zr, Zi);
+    Qr = []; Qi = [];
+    for (let t = 0; t < k; t++) { const [a, b] = H.mul(Zr[t], Zi[t]); Qr.push(a); Qi.push(b); }
+    orthonormalize(Qr, Qi);
+  }
+  // B = Qᴴ H has rows conj(Hᴴ Q_t) = conj(G_t); its left singular vectors are the eigenvectors of B Bᴴ
+  const Gr = [], Gi = [];
+  for (let t = 0; t < k; t++) { const [a, b] = H.mulH(Qr[t], Qi[t]); Gr.push(a); Gi.push(b); }
+  const Ar = new Float64Array(k * k), Ai = new Float64Array(k * k);
+  for (let a = 0; a < k; a++) for (let b = a; b < k; b++) {
+    let sr = 0, si = 0;
+    for (let j = 0; j < q; j++) { sr += Gr[a][j] * Gr[b][j] + Gi[a][j] * Gi[b][j]; si += Gr[a][j] * Gi[b][j] - Gi[a][j] * Gr[b][j]; }
+    Ar[a * k + b] = Ar[b * k + a] = sr; Ai[a * k + b] = si; Ai[b * k + a] = -si;
+  }
+  const E = hermEig(Ar, Ai, k), sv = E.vals.map(v => Math.sqrt(Math.max(0, v)));
+  // noise edge: the largest pure-noise singular value ≈ σ_t(√p + √q), σ_t from the late, decayed part of the signal
+  const nl = Math.max(4, Math.min(150, Math.floor(L / 4)));
+  let st = 0; for (let n = L - nl; n < L; n++) st += tr[n] * tr[n] + ti[n] * ti[n];
+  const tau = Math.sqrt(st / nl) * (Math.sqrt(p) + Math.sqrt(q));
+  // rank-r part H_r = Σ_t u_t c_t, u_t = Q·U_t, c_t = U_tᴴ B; its anti-diagonal sums are the convolutions u_t * c_t
+  let M = 1; while (M < L) M <<= 1;
+  const accR = new Float64Array(M), accI = new Float64Array(M);
+  for (let t = 0; t < Math.min(r, E.Ur.length); t++) {
+    const ur = new Float64Array(M), ui = new Float64Array(M), cr = new Float64Array(M), ci = new Float64Array(M);
+    for (let a = 0; a < k; a++) {
+      const wr = E.Ur[t][a], wi = E.Ui[t][a], qr = Qr[a], qi = Qi[a], gr = Gr[a], gi = Gi[a];
+      for (let i = 0; i < p; i++) { ur[i] += wr * qr[i] - wi * qi[i]; ui[i] += wr * qi[i] + wi * qr[i]; }
+      for (let j = 0; j < q; j++) { cr[j] += wr * gr[j] - wi * gi[j]; ci[j] += wr * gi[j] + wi * gr[j]; }
+    }
+    for (let j = 0; j < q; j++) ci[j] = -ci[j];
+    fft(ur, ui, false); fft(cr, ci, false);
+    for (let n = 0; n < M; n++) { accR[n] += ur[n] * cr[n] - ui[n] * ci[n]; accI[n] += ur[n] * ci[n] + ui[n] * cr[n]; }
+  }
+  fft(accR, accI, true);
+  const fr = new Float64Array(N), fi = new Float64Array(N);
+  for (let n = 0; n < L; n++) { const cnt = Math.min(n + 1, p, q, L - n); fr[n] = accR[n] / cnt; fi[n] = accI[n] / cnt; }
+  fi[0] = 0;
+  if (N % 2 === 0) fi[L - 1] = 0;
+  for (let i = L; i < N; i++) { fr[i] = fr[N - i]; fi[i] = -fi[N - i]; }
+  const [dr] = dftAny(fr, fi, false), out = { y: dr.map((v, i) => v + line[i]), sv, rank: r, rows: p, cols: q, line: useLine, tau, above: sv.filter(v => v > 1.5 * tau).length };
+  if (hsvdCache.size > 12) hsvdCache.clear();
+  hsvdCache.set(key, out);
+  return out;
+}
+
 /* ---------- the solvent reference on a fine uniform grid ---------- */
-function makeReference(x, y, smoothPts) {
+// smoothPts ≥ 3: Savitzky–Golay; hsvdRank ≥ 1: HSVD on an evenly spaced copy at the median spacing
+function makeReference(x, y, smoothPts, hsvdRank) {
   const idx = [];
   for (let i = 0; i < x.length; i++) if (Number.isFinite(x[i]) && Number.isFinite(y[i])) idx.push(i);
   if (idx.length < 8) throw new Error("the solvent wave needs at least 8 finite points");
   idx.sort((a, b) => x[a] - x[b]);
-  const xs = Float64Array.from(idx, i => x[i]);
-  let ys = Float64Array.from(idx, i => y[i]);
+  let xs = Float64Array.from(idx, i => x[i]), ys = Float64Array.from(idx, i => y[i]);
   for (let i = 1; i < xs.length; i++) if (!(xs[i] > xs[i - 1])) throw new Error("the solvent x values repeat; check its x axis");
-  if (smoothPts >= 3) ys = savitzkyGolay(ys, smoothPts, 2);
   const d = new Float64Array(xs.length - 1);
   for (let i = 0; i < d.length; i++) d[i] = xs[i + 1] - xs[i];
   const h = median(d), span = xs[xs.length - 1] - xs[0];
+  let den = null;
+  if (hsvdRank >= 1) {
+    const n = Math.max(16, Math.round(span / h) + 1), sp0 = spline(xs, ys);
+    const xu = Float64Array.from({ length: n }, (_, i) => xs[0] + span * i / (n - 1)), yu = xu.map(v => splineAt(sp0, v)), hs = hsvdDenoise(yu, hsvdRank);
+    den = { kind: "hsvd", x: xu, noisy: yu, denoised: hs.y, sv: hs.sv, rank: hs.rank, rows: hs.rows, cols: hs.cols, line: hs.line, tau: hs.tau, above: hs.above };
+    xs = xu; ys = hs.y;
+  } else if (smoothPts >= 3) {
+    const sm = savitzkyGolay(ys, smoothPts, 2);
+    den = { kind: "sg", x: xs, noisy: ys, denoised: sm, points: Math.round(smoothPts) % 2 ? Math.round(smoothPts) : Math.round(smoothPts) + 1 };
+    ys = sm;
+  }
   let du = Math.min(h, quantile(d, 0.05)) / 2, N = Math.floor(span / du + 1e-9) + 1;
   if (N > 65537) { N = 65537; du = span / (N - 1); }
   const sp = spline(xs, ys), g = new Float64Array(N);
@@ -764,7 +1015,7 @@ function makeReference(x, y, smoothPts) {
     while (hint < xs.length - 2 && xs[hint + 1] <= xq) hint++;
     g[k] = splineAt(sp, xq, hint);
   }
-  return { x0: xs[0], du, N, g, h, xmin: xs[0], xmax: xs[xs.length - 1], spec: null, cache: new Map() };
+  return { x0: xs[0], du, N, g, h, xmin: xs[0], xmax: xs[xs.length - 1], spec: null, cache: new Map(), den };
 }
 // the reference convolved with a Gaussian (FWHM gF) and a Lorentzian (FWHM lF), via FFT on a padded grid
 function broadened(ref, gF, lF) {
@@ -917,18 +1168,18 @@ function setupProblem(sample, solvent, opt) {
   const x = Float64Array.from(sample.x), y = Float64Array.from(sample.y), n = x.length;
   if (n !== y.length) throw new Error("the sample x and y have different lengths");
   if (n < 8) throw new Error("the sample wave needs at least 8 points");
-  const ref = makeReference(solvent.x, solvent.y, opt.smooth | 0);
-  const inside = new Uint8Array(n), inReg = new Uint8Array(n), regions = opt.regions || [];
+  const ref = makeReference(solvent.x, solvent.y, opt.smooth | 0, opt.hsvd | 0);
+  const inside = new Uint8Array(n), inReg = new Uint8Array(n), regions = opt.regions || [], exclude = opt.exclude || [];
   let lo = Infinity, hi = -Infinity, nin = 0;
   for (let i = 0; i < n; i++) {
     if (!(x[i] >= ref.xmin && x[i] <= ref.xmax)) continue;
     inside[i] = 1; nin++;
-    if (Number.isFinite(y[i]) && (!regions.length || regions.some(r => x[i] >= r[0] && x[i] <= r[1]))) {
+    if (Number.isFinite(y[i]) && (!regions.length || regions.some(r => x[i] >= r[0] && x[i] <= r[1])) && !exclude.some(r => x[i] >= r[0] && x[i] <= r[1])) {
       inReg[i] = 1; lo = Math.min(lo, x[i]); hi = Math.max(hi, x[i]);
     }
   }
   if (nin < 8) throw new Error("the sample and solvent x ranges hardly overlap; check the x axes");
-  if (!(hi > lo)) throw new Error(regions.length ? "no sample points inside the fit regions" : "no usable sample points");
+  if (!(hi > lo)) throw new Error(regions.length || exclude.length ? "no sample points inside the fit regions (after the exclusions)" : "no usable sample points");
   return { x, y, n, ref, inside, inReg, regions, xc: (lo + hi) / 2, hw: (hi - lo) / 2, lo, hi };
 }
 function fitMask(P, margin) {
@@ -1033,27 +1284,37 @@ function runManual(P, opt) {
     { key: "lfwhm", label: "Lorentzian FWHM added", value: Math.max(0, q.lfwhm), se: NaN, unit: XU },
     { key: "b0", label: "c, offset", value: q.offset, se: NaN, unit: "" }] };
 }
-function taylorBasis(P, d0, v0, terms) {
+// R, R′, R″, R‴ of the (shifted, broadened) reference on the sample axis. "grad": central differences at the reference's
+// point spacing h applied once, twice, three times (np.gradient), which keeps the reference noise in R″ and R‴ down.
+// "fine": the narrowest central differences at h/2, less biased on narrow bands, for a clean or denoised reference.
+function taylorStep(P, opt) { return opt.deriv === "fine" ? P.ref.du : P.ref.h; }
+function taylorBasis(P, d0, v0, terms, opt) {
   const arr = v0 > 0 ? broadened(P.ref, FWHM_PER_SIGMA * Math.sqrt(v0), 0) : P.ref.g;
-  const h = P.ref.du, F = s => sampleRef(P.ref, arr, P.x, d0 - s, 0, 0), b = {};
-  const f0 = F(0), fp = F(h), fm = F(-h);
-  b[0] = f0;
-  b[1] = fp.map((v, i) => (v - fm[i]) / (2 * h));
-  b[2] = fp.map((v, i) => (v - 2 * f0[i] + fm[i]) / (h * h));
-  if (terms.includes(3)) { const fp2 = F(2 * h), fm2 = F(-2 * h); b[3] = fp.map((v, i) => (fp2[i] - 2 * v + 2 * fm[i] - fm2[i]) / (2 * h * h * h)); }
+  const h = taylorStep(P, opt), need = Math.max(...terms), f = {}, b = {};
+  for (let k = -need; k <= need; k++) f[k] = sampleRef(P.ref, arr, P.x, d0 - k * h, 0, 0);
+  b[0] = f[0];
+  if (opt.deriv === "fine") {
+    if (need >= 1) b[1] = f[1].map((v, i) => (v - f[-1][i]) / (2 * h));
+    if (need >= 2) b[2] = f[1].map((v, i) => (v - 2 * f[0][i] + f[-1][i]) / (h * h));
+    if (need >= 3) b[3] = f[2].map((v, i) => (v - 2 * f[1][i] + 2 * f[-1][i] - f[-2][i]) / (2 * h * h * h));
+  } else {
+    if (need >= 1) b[1] = f[1].map((v, i) => (v - f[-1][i]) / (2 * h));
+    if (need >= 2) b[2] = f[2].map((v, i) => (v - 2 * f[0][i] + f[-2][i]) / (4 * h * h));
+    if (need >= 3) b[3] = f[3].map((v, i) => (v - 3 * f[1][i] + 3 * f[-1][i] - f[-3][i]) / (8 * h * h * h));
+  }
   return terms.map(k => b[k]);
 }
 function runTaylor(P, opt, spec) {
   const terms = [...new Set(spec.terms || opt.terms || [])].filter(k => k >= 0 && k <= 3).sort();
   if (!terms.length) throw new Error("tick at least one Taylor term");
-  const i0 = terms.indexOf(0), i1 = terms.indexOf(1), i2 = terms.indexOf(2), i3 = terms.indexOf(3), h = P.ref.du;
+  const i0 = terms.indexOf(0), i1 = terms.indexOf(1), i2 = terms.indexOf(2), i3 = terms.indexOf(3), h = taylorStep(P, opt);
   // Iterate: shift the reference by the fitted δ and broaden it by the fitted σ² (Gaussian, only while the total is ≥ 0),
   // then refit, until the local a₁ and a₂ terms vanish (Gauss–Newton on the shift-and-broadening model).
   const iterate = !!opt.iterate && i0 >= 0 && (i1 >= 0 || i2 >= 0), limit = Math.max(opt.maxShift > 0 ? opt.maxShift : 0, 20 * P.ref.h);
   const warnings = [], H2 = P.ref.h * P.ref.h;
   let d0 = 0, v0 = 0, lf, its = 0;
   for (;;) {
-    lf = linFit(P, taylorBasis(P, d0, v0, terms), fitMask(P, Math.abs(d0) + 2.5 * h + 3 * Math.sqrt(v0)), opt);
+    lf = linFit(P, taylorBasis(P, d0, v0, terms, opt), fitMask(P, Math.abs(d0) + Math.max(...terms) * h + 3 * Math.sqrt(v0)), opt);
     if (!iterate) break;
     const a0 = lf.f.coef[i0], m1 = i1 >= 0 ? -lf.f.coef[i1] / a0 : 0, dv = i2 >= 0 ? 2 * lf.f.coef[i2] / a0 - m1 * m1 : 0;
     const v1 = Math.max(0, v0 + dv);
@@ -1151,15 +1412,15 @@ const METHODS = [
     desc: "Like minimum roughness but minimises Σ|Δ(S − aR)|, the total variation of the result, which is less sensitive to spikes and strong solute bands. Solved exactly (weighted median)." },
   { id: "manual", group: "Scale factor only", label: "Manual: scale, shift and broadening by hand", run: runManual, opts: ["manual"],
     desc: "M = a·[R ⊗ V](x − δ) + c with your own scale, shift, Gaussian and Lorentzian broadening and offset. Start from the last fit, then adjust." },
-  { id: "t1", group: "Taylor expansion (linear)", label: "Taylor 1st order: scale + shift (R, R′)", run: runTaylor, terms: [0, 1], opts: ["base", "fiton", "iter"],
+  { id: "t1", group: "Taylor expansion (linear)", label: "Taylor 1st order: scale + shift (R, R′)", run: runTaylor, terms: [0, 1], opts: ["base", "fiton", "iter", "deriv"],
     desc: "S ≈ a₀R + a₁R′ + B in one linear fit; the shift is δ = −a₁/a₀. Removes the dispersive (derivative-shaped) residue left by a small shift of the solvent bands." },
-  { id: "t2", group: "Taylor expansion (linear)", label: "Taylor 2nd order: scale + shift + broadening (R, R′, R″)", run: runTaylor, terms: [0, 1, 2], opts: ["base", "fiton", "iter"],
-    desc: "S ≈ a₀R + a₁R′ + a₂R″ + B. Adds broadening (a₂ > 0) or narrowing (a₂ < 0) of the solvent bands: σ² = 2a₂/a₀ − δ²." },
-  { id: "t2e", group: "Taylor expansion (linear)", label: "Taylor 2nd order, even: scale + broadening (R, R″)", run: runTaylor, terms: [0, 2], opts: ["base", "fiton", "iter"],
+  { id: "t2", group: "Taylor expansion (linear)", label: "Taylor 2nd order: scale + shift + broadening (R, R′, R″)", run: runTaylor, terms: [0, 1, 2], opts: ["base", "fiton", "iter", "deriv"],
+    desc: "S ≈ a₀R + a₁R′ + a₂R″ + B. Adds broadening (a₂ > 0) or narrowing (a₂ < 0) of the solvent bands: σ² = 2a₂/a₀ − δ². With a noisy reference, denoise it with HSVD; exclude the solute bands." },
+  { id: "t2e", group: "Taylor expansion (linear)", label: "Taylor 2nd order, even: scale + broadening (R, R″)", run: runTaylor, terms: [0, 2], opts: ["base", "fiton", "iter", "deriv"],
     desc: "S ≈ a₀R + a₂R″ + B: width changes without a shift; σ² = 2a₂/a₀." },
-  { id: "t3", group: "Taylor expansion (linear)", label: "Taylor 3rd order: + asymmetry (R, R′, R″, R‴)", run: runTaylor, terms: [0, 1, 2, 3], opts: ["base", "fiton", "iter"],
+  { id: "t3", group: "Taylor expansion (linear)", label: "Taylor 3rd order: + asymmetry (R, R′, R″, R‴)", run: runTaylor, terms: [0, 1, 2, 3], opts: ["base", "fiton", "iter", "deriv"],
     desc: "S ≈ a₀R + a₁R′ + a₂R″ + a₃R‴ + B. The third-order term takes up asymmetric changes of the band shape (κ₃). Needs a low-noise reference; smooth it if R‴ looks noisy." },
-  { id: "tc", group: "Taylor expansion (linear)", label: "Taylor, choose the terms", run: runTaylor, terms: null, opts: ["base", "fiton", "iter", "terms"],
+  { id: "tc", group: "Taylor expansion (linear)", label: "Taylor, choose the terms", run: runTaylor, terms: null, opts: ["base", "fiton", "iter", "terms", "deriv"],
     desc: "Any combination of R, R′, R″, R‴. Without R the fit removes only the derivative terms, for example the solvent residues in a spectrum that already had the solvent subtracted." },
   { id: "sb0", group: "Shift and broadening (nonlinear)", label: "Shift only", run: runShiftBroaden, nl: {}, opts: ["base", "fiton", "sb"],
     desc: "S ≈ a·R(x − δ) + B with an exact (interpolated) shift of any size, found by a grid search and Nelder–Mead." },
@@ -1176,7 +1437,8 @@ const METHOD_BY_ID = Object.fromEntries(METHODS.map(m => [m.id, m]));
 
 // sample, solvent: { x, y } arrays. Returns the fitted solvent, baseline, result (NaN outside the solvent's x range) and parameters.
 function subtract(sample, solvent, methodId, options) {
-  const opt = Object.assign({ regions: [], baseline: -1, fitOn: 0, smooth: 0, iterate: false, terms: [0, 1, 2], maxShift: 0, roughOrder: 2, subBase: false }, options || {});
+  const opt = Object.assign({ regions: [], exclude: [], baseline: -1, fitOn: 0, smooth: 0, hsvd: 0, iterate: false, terms: [0, 1, 2], deriv: "grad",
+    maxShift: 0, roughOrder: 2, subBase: false }, options || {});
   const spec = METHOD_BY_ID[methodId];
   if (!spec) throw new Error("unknown method " + methodId);
   const P = setupProblem(sample, solvent, opt), res = spec.run(P, opt, spec);
@@ -1197,7 +1459,7 @@ function subtract(sample, solvent, methodId, options) {
   }
   return { method: spec, x: P.x, y: P.y, solvent: solv, baseline: base, result, params: res.params, warnings: res.warnings || [],
     fitPoints: n, rms: n ? Math.sqrt(ss / n) : NaN, roughness: nr ? Math.sqrt(r2 / nr) : NaN,
-    refSpacing: P.ref.h, xc: P.xc, hw: P.hw, lo: P.lo, hi: P.hi, inReg: P.inReg };
+    refSpacing: P.ref.h, xc: P.xc, hw: P.hw, lo: P.lo, hi: P.hi, inReg: P.inReg, refDenoise: P.ref.den };
 }
 function compareMethods(sample, solvent, options) {
   return METHODS.filter(m => m.id !== "manual" && m.id !== "tc").map(m => {
@@ -1245,7 +1507,7 @@ function makeExample() {
 (function () {
 const $ = id => document.getElementById(id);
 const FONT = "12px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif";
-const COL = { sample: "#000", fit: "#d40000", base: "#777", result: "#1f5fbf", region: "#e6e6e6", zero: "#999" };
+const COL = { sample: "#000", fit: "#d40000", base: "#777", result: "#1f5fbf", region: "#e6e6e6", excl: "#f6d4d4", zero: "#999" };
 const DEFAULT_METHOD = "t2";
 
 /* ---------- state ---------- */
@@ -1408,7 +1670,7 @@ function loadExample() {
   example = example || makeExample();
   useExample = true; files.S = files.R = files.X = null;
   for (const id of ["fileS", "fileR", "fileX"]) $(id).value = "";
-  $("regions").value = example.regions; $("baseline").value = "1"; $("methodSel").value = DEFAULT_METHOD;
+  $("regions").value = example.regions; $("exclude").value = ""; $("baseline").value = "1"; $("methodSel").value = DEFAULT_METHOD;
   view = null; hover = null; lastFit = null; manualSet = false; cmpRows = null; $("cmpTable").innerHTML = ""; $("cmpNote").textContent = "";
   $("outName").value = "sample_example_sub";
   refreshMenus("all"); showMethod(); update();
@@ -1416,11 +1678,11 @@ function loadExample() {
 
 /* ---------- options ---------- */
 function readOptions() {
-  const regions = parseRegions($("regions").value);
+  const regions = parseRegions($("regions").value), exclude = parseRegions($("exclude").value), den = $("denoise").value, dn = Math.round(Number($("denoiseN").value));
   const num = (id, d) => { const v = Number($(id).value); return $(id).value.trim() !== "" && Number.isFinite(v) ? v : d; };
   return {
-    regions, baseline: Number($("baseline").value), fitOn: Number($("fitOn").value), subBase: $("subBase").checked,
-    smooth: Math.max(0, Math.round(num("smooth", 0))), iterate: $("iterate").checked, roughOrder: Number($("roughOrder").value),
+    regions, exclude, baseline: Number($("baseline").value), fitOn: Number($("fitOn").value), subBase: $("subBase").checked,
+    smooth: den === "sg" && dn >= 3 ? dn : 0, hsvd: den === "hsvd" && dn >= 1 ? dn : 0, iterate: $("iterate").checked, roughOrder: Number($("roughOrder").value), deriv: $("deriv").value,
     maxShift: Math.max(0, num("maxShift", 0)), terms: [...document.querySelectorAll(".term")].filter(c => c.checked).map(c => Number(c.value)),
     manual: { scale: num("mScaleN", 1), shift: num("mShiftN", 0), gfwhm: Math.max(0, num("mGaussN", 0)), lfwhm: Math.max(0, num("mLorN", 0)), offset: num("mOffN", 0) },
   };
@@ -1542,6 +1804,8 @@ function drawPlot(boxId, canvasId, H, series, opts) {
   ctx.fillStyle = COL.region;
   const regs = last.opt.regions.length ? last.opt.regions : [];
   for (const [a, b] of regs) { const pa = Math.max(L, xm(a)), pb = Math.min(R, xm(b)); if (pb > pa) ctx.fillRect(pa, T, pb - pa, B - T); }
+  ctx.fillStyle = COL.excl;
+  for (const [a, b] of last.opt.exclude || []) { const pa = Math.max(L, xm(a)), pb = Math.min(R, xm(b)); if (pb > pa) ctx.fillRect(pa, T, pb - pa, B - T); }
   if (ylo < 0 && yhi > 0) {
     ctx.strokeStyle = COL.zero; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
     ctx.beginPath(); ctx.moveTo(L, Math.round(ym(0)) + 0.5); ctx.lineTo(R, Math.round(ym(0)) + 0.5); ctx.stroke(); ctx.setLineDash([]);
@@ -1618,7 +1882,89 @@ function renderCompare() {
     : `<tr data-id="${r.id}" tabindex="0" class="${r.id === cur ? "active" : ""}"><td class="l">${esc(r.label)}</td><td>${fmtG(r.scale, 5)}</td><td>${fmtG(r.shift, 4)}</td><td>${fmtG(r.gfwhm, 4)}</td><td>${fmtG(r.lfwhm, 4)}</td><td>${fmtG(r.rms, 4)}</td><td>${fmtG(r.roughness, 4)}</td></tr>`).join("");
   t.innerHTML = head + `<tbody>${body}</tbody>`;
 }
-function render() { drawAll(); renderParams(); renderCompare(); }
+function render() { drawAll(); renderParams(); renderCompare(); renderDenoise(); }
+
+/* ---------- solvent denoising diagnostics ---------- */
+function renderDenoise() {
+  const box = $("denBox"), d = last && last.refDenoise;
+  box.hidden = !d;
+  if (!d) return;
+  $("svWrap").hidden = d.kind !== "hsvd"; $("rankRow").hidden = d.kind !== "hsvd";
+  let ss = 0; d.noisy.forEach((v, i) => { ss += (v - d.denoised[i]) ** 2; });
+  const rmsDiff = Math.sqrt(ss / d.noisy.length);
+  if (d.kind === "hsvd") {
+    drawSV(d);
+    $("denNote").textContent = `HSVD keeps rank ${d.rank} of the ${d.rows} × ${d.cols} Hankel matrix. ${d.above} singular value${d.above === 1 ? " stands" : "s stand"} clearly above the ` +
+      `noise edge τ = σₜ(√m + √n) (more than 1.5 τ): about one per solvent band; the flat run near τ is noise. Right: noisy − denoised solvent, rms ${fmtG(rmsDiff, 3)}; ` +
+      `it should look like white noise, and dips at the band positions (grey) mean the rank is too low.` + (d.line ? " A straight line through the two ends was taken out before the DFT and added back, because the ends differ (sloping baseline)." : "");
+  } else {
+    $("denNote").textContent = `Savitzky–Golay, ${d.points} points, quadratic. Right: noisy − smoothed solvent, rms ${fmtG(rmsDiff, 3)}; band shapes in it (at the grey bands) mean the window is too wide.`;
+  }
+  drawDenoiseResidual(d);
+}
+function drawSV(d) {
+  const host = $("svBox"), { ctx, W } = prepCanvas(host, $("svCanvas"), 240), L = 56, R = W - 12, T = 22, B = 240 - 40;
+  const sv = d.sv.filter(v => v > 0), n = sv.length;
+  let lo = Math.log10(Math.min(...sv, d.tau || Infinity)), hi = Math.log10(Math.max(...sv));
+  lo = Math.floor(lo - 0.1); hi = Math.ceil(hi + 0.05);
+  const xm = i => L + (i - 0.5) / n * (R - L), ym = v => B - (Math.log10(v) - lo) / (hi - lo) * (B - T);
+  ctx.strokeStyle = "#000"; ctx.fillStyle = "#000"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(L - 0.5, T); ctx.lineTo(L - 0.5, B); ctx.lineTo(R, B + 0.5); ctx.stroke();
+  ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  for (let e = lo; e <= hi; e++) { const py = Math.round(ym(10 ** e)) + 0.5; ctx.beginPath(); ctx.moveTo(L - 5, py); ctx.lineTo(L, py); ctx.stroke(); ctx.fillText("1e" + minus(String(e)), L - 7, py); }
+  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  const st = niceStep(n, Math.max(3, Math.floor((R - L) / 50)));
+  for (let i = st; i <= n; i += st) { const px = Math.round(xm(i)) + 0.5; ctx.beginPath(); ctx.moveTo(px, B); ctx.lineTo(px, B + 5); ctx.stroke(); ctx.fillText(String(i), px, B + 7); }
+  ctx.fillText("singular value index", (L + R) / 2, B + 22);
+  if (d.tau > 0) {
+    ctx.strokeStyle = "#d40000"; ctx.setLineDash([5, 3]); const py = Math.round(ym(d.tau)) + 0.5;
+    ctx.beginPath(); ctx.moveTo(L, py); ctx.lineTo(R, py); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = "#d40000"; ctx.textAlign = "right"; ctx.textBaseline = "bottom"; ctx.fillText("noise edge τ", R - 2, py - 2);
+  }
+  const pr = Math.round(xm(d.rank + 0.5)) + 0.5;
+  ctx.strokeStyle = "#555"; ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.moveTo(pr, T); ctx.lineTo(pr, B); ctx.stroke(); ctx.setLineDash([]);
+  sv.forEach((v, k) => { ctx.fillStyle = k < d.rank ? "#000" : "#aaa"; ctx.beginPath(); ctx.arc(xm(k + 1), ym(v), 2.6, 0, 2 * Math.PI); ctx.fill(); });
+  ctx.fillStyle = "#333"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  ctx.fillText(`Hankel singular values: kept (black) up to rank ${d.rank}`, L + 4, T - 11);
+}
+function drawDenoiseResidual(d) {
+  const host = $("drBox"), { ctx, W } = prepCanvas(host, $("drCanvas"), 240), L = 56, R = W - 12, T = 22, B = 240 - 40, x = d.x, n = x.length;
+  const res = d.noisy.map((v, i) => v - d.denoised[i]);
+  let ss = 0; for (const v of res) ss += v * v;
+  const lim = 4 * Math.sqrt(ss / n) || 1, xlo = x[0], xhi = x[n - 1];
+  const xm = v => L + (v - xlo) / (xhi - xlo) * (R - L), ym = v => B - (v + lim) / (2 * lim) * (B - T);
+  let dmin = Infinity, dmax = -Infinity; for (const v of d.denoised) { dmin = Math.min(dmin, v); dmax = Math.max(dmax, v); }
+  ctx.fillStyle = "#e6e6e6"; ctx.beginPath(); ctx.moveTo(xm(x[0]), B);
+  for (let i = 0; i < n; i++) ctx.lineTo(xm(x[i]), B - (d.denoised[i] - dmin) / ((dmax - dmin) || 1) * (B - T));
+  ctx.lineTo(xm(x[n - 1]), B); ctx.closePath(); ctx.fill();
+  yTicks(ctx, L, T, B, -lim, lim, ym);
+  xTicks(ctx, L, R, B, xlo, xhi, xm, last ? xAxisLabel(last.R) : "x");
+  ctx.save(); ctx.beginPath(); ctx.rect(L, T, R - L, B - T); ctx.clip();
+  ctx.strokeStyle = "#333"; ctx.lineWidth = 1; ctx.beginPath();
+  for (let i = 0; i < n; i++) { const px = xm(x[i]), py = ym(Math.max(-lim, Math.min(lim, res[i]))); if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py); }
+  ctx.stroke(); ctx.restore();
+  ctx.fillStyle = "#333"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  ctx.fillText("noisy − denoised solvent (grey: the solvent, scaled)", L + 4, T - 11);
+}
+function rankCheck() {
+  const note = $("rankNote");
+  if (!last || !last.refDenoise || last.refDenoise.kind !== "hsvd") { note.textContent = ""; return; }
+  try {
+    const o = Object.assign({}, last.opt), S = { x: last.S.x, y: last.S.y }, R = { x: last.R.x, y: last.R.y };
+    const a = subtract(S, R, last.id, Object.assign({}, o, { hsvd: 15 })), b = subtract(S, R, last.id, Object.assign({}, o, { hsvd: 30 }));
+    let mx = 0, ss = 0, n = 0;
+    for (let i = 0; i < a.result.length; i++) {
+      if (!last.inReg[i] || !Number.isFinite(a.result[i]) || !Number.isFinite(b.result[i])) continue;
+      const dd = a.result[i] - b.result[i]; mx = Math.max(mx, Math.abs(dd)); ss += dd * dd; n++;
+    }
+    let sn = 0; last.refDenoise.noisy.forEach((v, i) => { sn += (v - last.refDenoise.denoised[i]) ** 2; });
+    const noise = Math.sqrt(sn / last.refDenoise.noisy.length), g = (r, k) => { const p = r.params.find(q => q.key === k); return p ? p.value : NaN; };
+    const extra = ["shift", "gfwhm"].filter(k => Number.isFinite(g(a, k))).map(k => `${k === "shift" ? "shift" : "FWHM"} ${fmtG(g(a, k), 4)} → ${fmtG(g(b, k), 4)}`).join(", ");
+    const rmsD = n ? Math.sqrt(ss / n) : NaN;
+    note.textContent = `Rank 15 → 30: the result in the fit regions changes by ${fmtG(rmsD, 2)} rms, ${fmtG(rmsD / noise, 2)} × the solvent's noise ` +
+      `(largest single point ${fmtG(mx, 2)})${extra ? "; " + extra : ""}. A change near or above the noise means something besides noise lives in those ranks.`;
+  } catch (e) { note.textContent = e.message; }
+}
 
 /* ---------- downloads ---------- */
 function download(name, data, type) {
@@ -1635,8 +1981,9 @@ function noteText() {
     `solvent: ${L.R.w.name} (${L.R.w.file || ""})` + (L.R.col !== null ? ` column ${L.R.col}` : ""),
     `x: ${L.S.mode === "scale" ? "wave scaling" : L.S.mode === "point" ? "point number" : "x wave " + L.S.xName}`,
     `method: ${L.method.label}`,
-    `fit regions: ${L.opt.regions.length ? L.opt.regions.map(r => r.join("-")).join(", ") : "everything"}`,
-    `baseline: ${$("baseline").selectedOptions[0].text}; fit on ${$("fitOn").selectedOptions[0].text}; solvent smoothing ${L.opt.smooth || "off"}`,
+    `fit regions: ${L.opt.regions.length ? L.opt.regions.map(r => r.join("-")).join(", ") : "everything"}` +
+      (L.opt.exclude.length ? `; excluded: ${L.opt.exclude.map(r => r.join("-")).join(", ")}` : ""),
+    `baseline: ${$("baseline").selectedOptions[0].text}; fit on ${$("fitOn").selectedOptions[0].text}; derivatives ${L.opt.deriv}; solvent denoising ${L.opt.hsvd ? "HSVD rank " + L.opt.hsvd : L.opt.smooth ? "Savitzky-Golay " + L.opt.smooth + " points" : "off"}`,
   ];
   for (const p of L.params) lines.push(`${p.key}=${p.value}` + (Number.isFinite(p.se) ? ` +/- ${p.se}` : "") + (unitText(p.unit) ? ` ${unitText(p.unit)}` : ""));
   lines.push(`rms=${L.rms}; points=${L.fitPoints}; units of x: ${xu}`);
@@ -1714,6 +2061,14 @@ $("addZoom").addEventListener("click", () => {
   view = null; update();
 });
 $("clearRegions").addEventListener("click", () => { $("regions").value = ""; update(); });
+$("excZoom").addEventListener("click", () => {
+  if (!view) { $("fitErr").textContent = "Zoom in on a solute band first (drag across a plot), then exclude it."; $("fitErr").hidden = false; return; }
+  const st = last ? Math.max(1e-9, last.refSpacing / 10) : 0.1, d = Math.max(0, -Math.floor(Math.log10(st)));
+  const txt = `${view[0].toFixed(Math.min(d, 6))}-${view[1].toFixed(Math.min(d, 6))}`, cur = $("exclude").value.trim();
+  $("exclude").value = cur ? cur + ", " + txt : txt;
+  view = null; update();
+});
+$("clearExclude").addEventListener("click", () => { $("exclude").value = ""; update(); });
 
 /* ---------- wiring ---------- */
 $("methodSel").innerHTML = [...new Set(METHODS.map(m => m.group))].map(g =>
@@ -1726,9 +2081,20 @@ for (const K of ["S", "R"]) {
   $("x" + K).addEventListener("change", () => { view = null; update(); });
 }
 $("methodSel").addEventListener("change", () => { showMethod(); update(); renderCompare(); });
-for (const id of ["baseline", "fitOn", "roughOrder", "subBase", "iterate"]) $(id).addEventListener("change", () => update());
+for (const id of ["baseline", "fitOn", "roughOrder", "subBase", "iterate", "deriv"]) $(id).addEventListener("change", () => update());
 document.querySelectorAll(".term").forEach(c => c.addEventListener("change", () => update()));
-for (const id of ["regions", "smooth", "maxShift"]) { $(id).addEventListener("input", () => schedule(400)); $(id).addEventListener("change", () => update()); }
+for (const id of ["regions", "exclude", "denoiseN", "maxShift"]) { $(id).addEventListener("input", () => schedule(400)); $(id).addEventListener("change", () => update()); }
+const denoiseN = { hsvd: 20, sg: 7 };
+$("denoise").addEventListener("change", () => { showDenoise(); update(); });
+$("denoiseN").addEventListener("input", () => { const k = $("denoise").value; if (k in denoiseN) denoiseN[k] = Number($("denoiseN").value); });
+function showDenoise() {
+  const k = $("denoise").value;
+  $("denoiseN").hidden = k === "off";
+  if (k in denoiseN) $("denoiseN").value = String(denoiseN[k]);
+  $("denoiseNote").textContent = k === "hsvd" ? "2–3 × the number of solvent bands; check that the result is the same at 15 and 30"
+    : k === "sg" ? "odd number of points, quadratic; keep it well below the points across a band" : "";
+}
+$("rankCheck").addEventListener("click", rankCheck);
 for (const [r, n] of MAN) {
   $(r).addEventListener("input", () => { $(n).value = String(Number(Number($(r).value).toPrecision(6))); manualSet = true; update(); });
   $(n).addEventListener("input", () => { $(r).value = $(n).value; manualSet = true; schedule(80); });
@@ -1750,11 +2116,12 @@ $("compare").addEventListener("click", () => {
 });
 $("cmpTable").addEventListener("click", e => { const tr = e.target.closest("tr[data-id]"); if (tr) { $("methodSel").value = tr.dataset.id; showMethod(); update(); } });
 $("cmpTable").addEventListener("keydown", e => { if (e.key === "Enter") { const tr = e.target.closest("tr[data-id]"); if (tr) { $("methodSel").value = tr.dataset.id; showMethod(); update(); } } });
-for (const id of ["topBox", "botBox"]) {
+for (const id of ["topBox", "botBox", "svBox", "drBox"]) {
   let lastW = 0;
-  new ResizeObserver(() => { const w = $(id).clientWidth; if (w !== lastW) { lastW = w; drawAll(); } }).observe($(id));
+  new ResizeObserver(() => { const w = $(id).clientWidth; if (w && w !== lastW) { lastW = w; if (id === "topBox" || id === "botBox") drawAll(); else renderDenoise(); } }).observe($(id));
 }
 
+showDenoise();
 loadExample();
 })();
 </script>

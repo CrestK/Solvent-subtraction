@@ -1,6 +1,6 @@
 // Checks the numerical core embedded in index.html (<script id="core">): the Igor file readers and writers, the numerics
 // and every subtraction method on synthetic spectra with known scale, shift and broadening.
-//   node tests/validate.mjs        (about 10 s)
+//   node tests/validate.mjs        (about 15 s)
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,7 +11,7 @@ const m = html.match(/<script id="core">([\s\S]*?)<\/script>/);
 if (!m) throw new Error("index.html has no <script id=\"core\">");
 const names = ["parseIBW", "parsePXP", "parseITX", "parseDelimited", "readWaveFile", "writeIBW", "writeITX", "writeDelimited", "ibwChecksum",
   "igorName", "spline", "splineAt", "savitzkyGolay", "fft", "makeReference", "broadened", "sampleRef", "lstsq", "parseRegions",
-  "subtract", "compareMethods", "METHODS", "makeExample", "FWHM_PER_SIGMA"];
+  "subtract", "compareMethods", "METHODS", "makeExample", "FWHM_PER_SIGMA", "hsvdDenoise", "symEig", "hermEig"];
 // new Function keeps the core in this realm (Node's vm sandbox makes typed arrays much slower)
 const core = new Function(m[1] + `\nreturn {${names.join(",")}};`)();
 
@@ -242,10 +242,11 @@ function ibw5BE2D(name, rows, cols) {
 // 9. Taylor expansion
 {
   const sh = synth({ shape: "gauss", shift: 0.3, solute: false });
-  const t1 = run(sh, "t1");
-  check("9a 1st order, shift 0.3", close(P(t1, "shift"), 0.3, 0.01) && close(P(t1, "a0"), 0.8, 0.005), `δ ${P(t1, "shift").toFixed(4)}, a₀ ${P(t1, "a0").toFixed(4)}`);
+  const t1 = run(sh, "t1", { deriv: "fine" }), t1g = run(sh, "t1"), t1i = run(sh, "t1", { iterate: true });
+  check("9a 1st order, shift 0.3 (fine, np.gradient, iterated)", close(P(t1, "shift"), 0.3, 0.01) && close(P(t1, "a0"), 0.8, 0.005) && close(P(t1g, "shift"), 0.3, 0.03)
+    && close(P(t1i, "shift"), 0.3, 1e-3), `δ ${P(t1, "shift").toFixed(4)}, ${P(t1g, "shift").toFixed(4)}, ${P(t1i, "shift").toFixed(5)}`);
   const sb = synth({ shape: "gauss", shift: 0.3, gf: 2, solute: false });
-  const t2 = run(sb, "t2"), t2i = run(sb, "t2", { iterate: true }), t3 = run(sb, "t3", { iterate: true }), nl = run(sb, "sbg");
+  const t2 = run(sb, "t2", { deriv: "fine" }), t2i = run(sb, "t2", { iterate: true }), t3 = run(sb, "t3", { iterate: true }), nl = run(sb, "sbg");
   check("9b 2nd order, shift 0.3 + Gaussian FWHM 2", close(P(t2, "shift"), 0.3, 0.03) && close(P(t2, "gfwhm"), 2, 0.3), `δ ${P(t2, "shift").toFixed(4)}, FWHM ${P(t2, "gfwhm").toFixed(3)}`);
   check("9c iterated 2nd order = nonlinear fit ≈ true values", close(P(t2i, "shift"), P(nl, "shift"), 1e-4) && close(P(t2i, "gfwhm"), P(nl, "gfwhm"), 1e-3)
     && close(P(t2i, "shift"), 0.3, 2e-3) && close(P(t2i, "gfwhm"), 2, 0.03) && close(P(t2i, "a0"), 0.8, 2e-3),
@@ -256,7 +257,7 @@ function ibw5BE2D(name, rows, cols) {
     `Taylor δ ${P(t2b, "shift").toFixed(5)} w ${P(t2b, "gfwhm").toFixed(4)}; nonlinear δ ${P(sbg, "shift").toFixed(5)} w ${P(sbg, "gfwhm").toFixed(4)}`);
   // narrowing: the reference bands are broader than the sample's
   const narrowS = synth({ shape: "gauss", shift: 0.4, solute: false }), wide = synth({ shape: "gauss", gf: 2, scale: 1, solute: false, base: false });
-  const nr = core.subtract({ x: narrowS.x, y: narrowS.S }, { x: wide.x, y: wide.S }, "t2", { regions: REGIONS, baseline: 1, iterate: true });
+  const nr = core.subtract({ x: narrowS.x, y: narrowS.S }, { x: wide.x, y: wide.S }, "t2", { regions: REGIONS, baseline: 1, iterate: true, deriv: "fine" });
   const s2 = -((2 / FW) ** 2);
   check("9f narrowing gives σ² < 0", close(P(nr, "sigma2"), s2, 0.15 * Math.abs(s2)) && close(P(nr, "shift"), 0.4, 0.01), `σ² ${P(nr, "sigma2").toFixed(4)} (true ${s2.toFixed(4)}), δ ${P(nr, "shift").toFixed(4)}`);
   const dr = run(synth({ shift: 0.5 }), "tc", { terms: [1, 2] });
@@ -299,6 +300,74 @@ function ibw5BE2D(name, rows, cols) {
     `Taylor (iterated) δ ${P(e1, "shift").toFixed(3)}±${e1.params.find(p => p.key === "shift").se.toFixed(3)} w ${P(e1, "gfwhm").toFixed(2)}; nonlinear δ ${P(e2, "shift").toFixed(3)}±${e2.params.find(p => p.key === "shift").se.toFixed(3)} w ${P(e2, "gfwhm").toFixed(2)}±${e2.params.find(p => p.key === "gfwhm").se.toFixed(2)}`);
   const t0 = performance.now(), rows = core.compareMethods(S, R, { regions, baseline: 1 });
   check("11d every method runs on the example", rows.length === core.METHODS.length - 2 && rows.every(r => !r.error && Number.isFinite(r.rms)), `${rows.length} methods in ${(performance.now() - t0).toFixed(0)} ms`);
+}
+
+// 12. the HSVD + Taylor pipeline of the "Solvent subtraction with an HSVD-denoised, Taylor-expanded reference" notes:
+// cyclohexane Lorentzian bands, 300–1700 cm⁻¹ at 1 cm⁻¹, sample = 0.85·[R ⊗ G(σ 1.2)](ν − 0.5) + solute + quadratic baseline,
+// noise 0.003 on both spectra; quoted values: HSVD reference error 3.0 → ≈1.2 (rank 20), ≈0.6 (rank 8) × 10⁻³;
+// result noise ≈3.5 × 10⁻³ with the noisy reference, ≈3.0–3.07 with the HSVD reference
+{
+  const CYC = [[384, 0.04, 9], [426, 0.08, 9], [801, 1.0, 9], [1028, 0.45, 10], [1157, 0.07, 10], [1266, 0.17, 11], [1347, 0.04, 12], [1444, 0.26, 16]];
+  const SOL = [[650, 0.02, 14], [1010, 0.02, 14], [1180, 0.025, 14], [1350, 0.015, 16], [1590, 0.03, 16]];
+  const N = 1401, x = Float64Array.from({ length: N }, (_, i) => 300 + i), sum = (bands, v) => bands.reduce((a, b) => a + lor(v, b), 0);
+  const clean = x.map(v => sum(CYC, v)), solute = x.map(v => sum(SOL, v));
+  const nodes = []; let ws = 0;
+  for (let j = -200; j <= 200; j++) { const s = 7.2 * j / 200, w = Math.exp(-s * s / (2 * 1.44)); nodes.push([s, w]); ws += w; }
+  const sample0 = x.map((v, i) => { let t = 0; for (const [d, w] of nodes) t += w * sum(CYC, v - 0.5 - d); return 0.85 * t / ws + solute[i] + 0.02 + 0.01 * (v - 1000) / 700 + 0.015 * ((v - 1000) / 700) ** 2; });
+  let seed = 12345; const rnd = () => (seed = (seed * 48271) % 2147483647) / 2147483647, gn = () => Math.sqrt(-2 * Math.log(rnd())) * Math.cos(2 * Math.PI * rnd());
+  const noisy = a => a.map(v => v + 0.003 * gn()), rms = (a, b) => Math.sqrt(a.reduce((s, v, i) => s + (v - b[i]) ** 2, 0) / a.length);
+
+  // a. eigen-solvers
+  const k = 6, Ar = new Float64Array(k * k), Ai = new Float64Array(k * k);
+  for (let a = 0; a < k; a++) for (let b = a; b < k; b++) { Ar[a * k + b] = Ar[b * k + a] = Math.sin(a + 2 * b) + (a === b ? 3 : 0); const im = a === b ? 0 : Math.cos(3 * a - b); Ai[a * k + b] = im; Ai[b * k + a] = -im; }
+  const E = core.hermEig(Ar, Ai, k);
+  let eres = 0;
+  E.vals.forEach((lam, t) => { for (let a = 0; a < k; a++) { let sr = 0, si = 0; for (let b = 0; b < k; b++) { sr += Ar[a * k + b] * E.Ur[t][b] - Ai[a * k + b] * E.Ui[t][b]; si += Ar[a * k + b] * E.Ui[t][b] + Ai[a * k + b] * E.Ur[t][b]; } eres = Math.max(eres, Math.hypot(sr - lam * E.Ur[t][a], si - lam * E.Ui[t][a])); } });
+  check("12a Hermitian eigen-decomposition (Jacobi on the real embedding)", E.vals.length === k && eres < 1e-10 && E.vals.every((v, i) => !i || v <= E.vals[i - 1]), `max |Au − λu| ${eres.toExponential(1)}`);
+
+  // b–d. HSVD on its own
+  const c20 = core.hsvdDenoise(clean, 20);
+  let e20 = 0, e8 = 0, above = 0;
+  for (let r = 0; r < 4; r++) { const R = noisy(clean), d20 = core.hsvdDenoise(R, 20); e20 += rms(d20.y, clean) / 4; e8 += rms(core.hsvdDenoise(R, 8).y, clean) / 4; above = d20.above; }
+  check("12b HSVD: a noise-free sum of 8 Lorentzians comes back unchanged", rms(c20.y, clean) < 1e-8 && c20.rows === 350, `rms change ${rms(c20.y, clean).toExponential(1)}, Hankel ${c20.rows} × ${c20.cols}`);
+  check("12c HSVD of the noisy reference matches the notes (≈1.2 at rank 20, ≈0.6 at rank 8; 8 bands clearly above the noise edge)",
+    e20 > 1.0e-3 && e20 < 1.4e-3 && e8 > 0.5e-3 && e8 < 0.75e-3 && above === 8, `reference error 3.0 → ${(1e3 * e20).toFixed(2)} (rank 20), ${(1e3 * e8).toFixed(2)} (rank 8) × 10⁻³; ${above} above 1.5 τ`);
+  // a 0 → 0.5 slope makes a jump at the ends of the periodic DFT: the line is taken out, and the edges are as good as the middle
+  const slope = clean.map((v, i) => v + 0.5 * i / N);
+  let eEdge = 0, eMid = 0, nE = 0, nM = 0, lineUsed = true;
+  for (let r = 0; r < 4; r++) {
+    const ds = core.hsvdDenoise(noisy(slope), 20); lineUsed = lineUsed && ds.line;
+    for (let i = 0; i < N; i++) { const e2 = (ds.y[i] - slope[i]) ** 2; if (i < 60 || i >= N - 60) { eEdge += e2; nE++; } else { eMid += e2; nM++; } }
+  }
+  check("12d HSVD with a sloping baseline: line taken out, edges no worse than the middle", lineUsed && Math.sqrt(eEdge / nE) < 1.3 * Math.sqrt(eMid / nM) && Math.sqrt(eMid / nM) < 1.4e-3,
+    `error rms × 10⁻³: edges ${(1e3 * Math.sqrt(eEdge / nE)).toFixed(2)}, middle ${(1e3 * Math.sqrt(eMid / nM)).toFixed(2)}`);
+
+  // e–f. Taylor fits on the full pipeline: noise across realizations, away from every band
+  const exclude = SOL.map(b => [b[0] - 25, b[0] + 25]), away = x.map(v => CYC.concat(SOL).every(b => Math.abs(v - b[0]) > 30));
+  const trial = (opt, nreal, cleanRef) => {
+    const res = [], w = [];
+    for (let r = 0; r < nreal; r++) {
+      const out = core.subtract({ x, y: noisy(sample0) }, { x, y: cleanRef ? clean : noisy(clean) }, "t2", Object.assign({ regions: [], exclude, baseline: 3, subBase: true }, opt));
+      res.push(out.result); w.push(P(out, "gfwhm"));
+    }
+    let v = 0, nv = 0;
+    for (let i = 0; i < N; i++) { if (!away[i]) continue; let m = 0; for (const a of res) m += a[i] / nreal; for (const a of res) { v += (a[i] - m) ** 2 / (nreal - 1); } nv++; }
+    return { noise: Math.sqrt(v / nv), fwhm: w.reduce((a, b) => a + b) / nreal };
+  };
+  const plain = trial({}, 12), fine = trial({ deriv: "fine" }, 12), withHsvd = trial({ hsvd: 20 }, 12), perfect = trial({}, 6, true), trueW = 1.2 * FW;
+  check("12e np.gradient derivatives resist reference noise (no regression dilution of a₂)", close(plain.fwhm, trueW, 0.4) && fine.fwhm < trueW - 0.8,
+    `FWHM ${plain.fwhm.toFixed(2)} (np.gradient) vs ${fine.fwhm.toFixed(2)} (fine), true ${trueW.toFixed(2)}`);
+  check("12f Taylor + HSVD reference reaches the noise floor of a perfect reference", plain.noise > 3.3e-3 && withHsvd.noise < 3.2e-3 && withHsvd.noise < 0.92 * plain.noise && close(withHsvd.noise, perfect.noise, 0.25e-3),
+    `noise × 10⁻³: noisy reference ${(1e3 * plain.noise).toFixed(2)}, HSVD ${(1e3 * withHsvd.noise).toFixed(2)}, perfect ${(1e3 * perfect.noise).toFixed(2)} (notes: 3.50, 3.02, 3.00)`);
+
+  // g–h. exclusions and HSVD on an uneven axis
+  const sx = synth({ scale: 0.7, solute: false, base: false }), spike = { x: sx.x, R: sx.R, S: sx.S.map((v, i) => v + 0.3 * Math.exp(-(((sx.x[i] - 1036) / 4) ** 2))) };
+  const inc = run(spike, "ls", { regions: [], baseline: -1 }), exc = run(spike, "ls", { regions: [], exclude: [[1026, 1046]], baseline: -1 });
+  check("12g excluded ranges are left out of the fit", Math.abs(P(inc, "scale") - 0.7) > 0.01 && close(P(exc, "scale"), 0.7, 1e-4), `a ${P(inc, "scale").toFixed(4)} with the band, ${P(exc, "scale").toFixed(6)} without`);
+  const ux = Float64Array.from({ length: N }, (_, i) => 300 + i * (1 + 1e-4 * i) * 0.88), uR = ux.map(v => sum(CYC, v)), uS = ux.map(v => 0.6 * sum(CYC, v - 0.3));
+  const ur = core.subtract({ x: ux, y: uS }, { x: ux, y: uR }, "t1", { regions: [], baseline: -1, hsvd: 20, iterate: true });
+  check("12h HSVD on an uneven x axis (resampled evenly first)", close(P(ur, "shift"), 0.3, 2e-3) && close(P(ur, "a0"), 0.6, 2e-3) && ur.refDenoise.kind === "hsvd",
+    `δ ${P(ur, "shift").toFixed(4)}, a₀ ${P(ur, "a0").toFixed(4)}`);
 }
 
 console.log(fails ? `${fails} FAILED` : "all passed");

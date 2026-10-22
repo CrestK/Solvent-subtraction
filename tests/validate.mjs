@@ -11,7 +11,7 @@ const m = html.match(/<script id="core">([\s\S]*?)<\/script>/);
 if (!m) throw new Error("index.html has no <script id=\"core\">");
 const names = ["parseIBW", "parsePXP", "parseITX", "parseDelimited", "readWaveFile", "writeIBW", "writeITX", "writeDelimited", "ibwChecksum",
   "igorName", "spline", "splineAt", "savitzkyGolay", "fft", "makeReference", "broadened", "sampleRef", "lstsq", "parseRegions",
-  "subtract", "compareMethods", "METHODS", "makeExample", "FWHM_PER_SIGMA", "hsvdDenoise", "symEig", "hermEig"];
+  "subtract", "compareMethods", "METHODS", "makeExample", "FWHM_PER_SIGMA", "hsvdDenoise", "symEig", "hermEig", "crc32", "zipStore"];
 // new Function keeps the core in this realm (Node's vm sandbox makes typed arrays much slower)
 const core = new Function(m[1] + `\nreturn {${names.join(",")}};`)();
 
@@ -161,6 +161,18 @@ function ibw5BE2D(name, rows, cols) {
     && back.waves[1].name === "y" && Number.isNaN(back.waves[1].data[0]) && back.waves[1].data[1] === 5);
   let threw = false; try { core.readWaveFile("exp.h5xp", new Uint8Array(10)); } catch (e) { threw = /HDF5/.test(e.message); }
   check("5d .h5xp refused with a reason", threw);
+}
+
+// 5e. the .zip the claude.ai preview saves Igor files in: CRC-32 check value, and the stored file read back from the archive
+{
+  const crcOk = core.crc32(enc("123456789")) === 0xcbf43926;
+  const ibw = core.writeIBW({ name: "res", data: Float64Array.from([1, 2, 3]), x0: 0, dx: 1 }), z = core.zipStore([{ name: "res.ibw", data: ibw }, { name: "res.itx", data: "IGOR\n" }]);
+  const dv = new DataView(z.buffer), endAt = z.length - 22, n = dv.getUint16(endAt + 10, true), cdOff = dv.getUint32(endAt + 16, true);
+  const nameLen = dv.getUint16(cdOff + 28, true), localOff = dv.getUint32(cdOff + 42, true), size = dv.getUint32(localOff + 22, true);
+  const name = new TextDecoder().decode(z.subarray(cdOff + 46, cdOff + 46 + nameLen)), dataAt = localOff + 30 + dv.getUint16(localOff + 26, true);
+  const back = core.parseIBW(z.subarray(dataAt, dataAt + size));
+  check("5e .zip of the Igor files (stored): CRC-32 and read back", crcOk && dv.getUint32(endAt, true) === 0x06054b50 && n === 2 && name === "res.ibw"
+    && dv.getUint32(localOff + 14, true) === core.crc32(ibw) && Array.from(back.data).join() === "1,2,3", `${n} files, first ${name}, ${size} bytes`);
 }
 
 // 6. fit regions
